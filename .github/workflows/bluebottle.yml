@@ -1,0 +1,90 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - .golangci.yml
+      - scripts/**
+      - .github/workflows/bluebottle.yml
+  # Unlike the service repos, bluebottle gates predastore, viperblock and
+  # spinifex, so feature branches are checked before merge rather than after.
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_and_test:
+    name: Build and Test
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run Tests with Coverage
+        run: make test-cover
+
+      - name: Check Diff Coverage
+        run: scripts/diff-coverage.sh coverage.out --base HEAD~1
+
+  race_detection:
+    name: Race Detection
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
+
+      - name: Run Tests with Race Detector
+        run: make test-race
+
+  lint_and_security:
+    name: Lint and Security
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+      - name: Govulncheck
+        run: make govulncheck
