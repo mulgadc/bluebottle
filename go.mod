@@ -2,11 +2,6 @@ module github.com/mulgadc/bluebottle
 
 go 1.26.5
 
-tool (
-	go.uber.org/nilaway/cmd/nilaway
-	golang.org/x/vuln/cmd/govulncheck
-)
-
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/stretchr/testify v1.11.1
@@ -55,4 +50,9 @@ require (
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+tool (
+	go.uber.org/nilaway/cmd/nilaway
+	golang.org/x/vuln/cmd/govulncheck
 )
