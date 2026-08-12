@@ -1,7 +1,7 @@
-// Package otelsetup configures OpenTelemetry tracing and metrics for
-// predastore. Export is gated on the standard OTLP environment variables; with
-// no endpoint configured Init is a functional no-op, so instrumented binaries
-// ship everywhere at zero cost.
+// Package otelsetup configures OpenTelemetry tracing, metrics and logging for
+// Mulga services. Export is gated on the standard OTLP environment variables;
+// with no endpoint configured Init is a functional no-op, so instrumented
+// binaries ship everywhere at zero cost.
 package otelsetup
 
 import (
@@ -32,73 +32,135 @@ import (
 
 const shutdownTimeout = 10 * time.Second
 
-// Init installs global tracer and meter providers exporting OTLP over gRPC,
-// plus the W3C trace-context propagator. The returned shutdown func flushes
-// and stops both providers; it is always safe to call. When no OTLP endpoint
-// is configured (or OTEL_SDK_DISABLED=true) only the propagator is installed
-// and the globals stay no-op.
-func Init(ctx context.Context, serviceName string) (func(context.Context) error, error) {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{}))
+// initConfig is the resolved set of Init options.
+type initConfig struct {
+	tracing        bool
+	runtimeMetrics bool
+	envFallbacks   []string
+}
+
+// Option customises Init for services that cannot take the default bootstrap.
+type Option func(*initConfig)
+
+// WithoutTracing skips the TracerProvider and the W3C propagator. For services
+// embedded in a host process that already owns tracing (viperblock inside
+// spinifex), where installing the globals would clobber the host's own.
+func WithoutTracing() Option {
+	return func(c *initConfig) { c.tracing = false }
+}
+
+// WithoutRuntimeMetrics skips Go runtime instrumentation.
+func WithoutRuntimeMetrics() Option {
+	return func(c *initConfig) { c.runtimeMetrics = false }
+}
+
+// WithEnvironmentFallback names extra environment variables consulted, in
+// order, for the deployment environment when MULGA_ENV is unset.
+func WithEnvironmentFallback(vars ...string) Option {
+	return func(c *initConfig) { c.envFallbacks = append(c.envFallbacks, vars...) }
+}
+
+// Init installs global tracer, meter and logger providers exporting OTLP over
+// gRPC, plus the W3C trace-context propagator. The returned shutdown func
+// flushes and stops every installed provider; it is always safe to call. When
+// no OTLP endpoint is configured (or OTEL_SDK_DISABLED=true) only the
+// propagator is installed and the globals stay no-op.
+func Init(ctx context.Context, serviceName string, opts ...Option) (func(context.Context) error, error) {
+	cfg := initConfig{tracing: true, runtimeMetrics: true}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	if cfg.tracing {
+		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{}, propagation.Baggage{}))
+	}
 
 	if !exportEnabled() {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	res, err := newResource(ctx, serviceName)
+	res, err := newResource(ctx, serviceName, cfg.envFallbacks)
 	if err != nil {
 		return nil, fmt.Errorf("otel resource for %s: %w", serviceName, err)
 	}
 
-	traceExp, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("otlp trace exporter for %s: %w", serviceName, err)
+	// Collected in install order so a later exporter failure can unwind the
+	// providers already made global, leaving nothing half-started.
+	var installed []func(context.Context) error
+
+	if cfg.tracing {
+		traceExp, err := otlptracegrpc.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("otlp trace exporter for %s: %w", serviceName, err)
+		}
+		tp := sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(traceExp),
+			sdktrace.WithResource(res),
+			sdktrace.WithSampler(rootSampler()),
+		)
+		otel.SetTracerProvider(tp)
+		installed = append(installed, tp.Shutdown)
 	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExp),
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(rootSampler()),
-	)
-	otel.SetTracerProvider(tp)
 
 	metricExp, err := otlpmetricgrpc.New(ctx)
 	if err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
 		return nil, errors.Join(
 			fmt.Errorf("otlp metric exporter for %s: %w", serviceName, err),
-			tp.Shutdown(shutdownCtx))
+			shutdownAll(installed))
 	}
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)),
 		sdkmetric.WithResource(res),
 	)
 	otel.SetMeterProvider(mp)
+	installed = append(installed, mp.Shutdown)
 
 	logExp, err := otlploggrpc.New(ctx)
 	if err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
 		return nil, errors.Join(
 			fmt.Errorf("otlp log exporter for %s: %w", serviceName, err),
-			tp.Shutdown(shutdownCtx), mp.Shutdown(shutdownCtx))
+			shutdownAll(installed))
 	}
 	lp := sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(newUTF8Processor(sdklog.NewBatchProcessor(logExp))),
 	)
 	loggerglobal.SetLoggerProvider(lp)
+	installed = append(installed, lp.Shutdown)
 
-	if err := otelruntime.Start(); err != nil {
-		slog.Warn("otel runtime metrics disabled", "err", err)
+	if cfg.runtimeMetrics {
+		if err := otelruntime.Start(); err != nil {
+			slog.Warn("otel runtime metrics disabled", "err", err)
+		}
 	}
+
+	// Attaches the OTLP bridge to a default logger installed before Init, so
+	// the two are order-independent. No-op otherwise.
+	refreshDefaultLogger()
 
 	shutdown := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer cancel()
-		return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
+		var errs error
+		for _, stop := range installed {
+			errs = errors.Join(errs, stop(ctx))
+		}
+		return errs
 	}
 	return shutdown, nil
+}
+
+// shutdownAll stops providers installed before a failing exporter, on its own
+// context: the caller's may already be cancelled by whatever caused the error.
+func shutdownAll(installed []func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	var errs error
+	for _, stop := range installed {
+		errs = errors.Join(errs, stop(ctx))
+	}
+	return errs
 }
 
 // rootSampler samples locally-rooted traces at MULGA_ROOT_TRACE_RATIO
@@ -127,6 +189,7 @@ func exportEnabled() bool {
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
 		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
 	} {
 		if os.Getenv(key) != "" {
 			return true
@@ -137,12 +200,12 @@ func exportEnabled() bool {
 
 // newResource builds the service resource: identity attrs set here, plus
 // host detection and anything in OTEL_RESOURCE_ATTRIBUTES (ci.run_id etc.).
-func newResource(ctx context.Context, serviceName string) (*resource.Resource, error) {
+func newResource(ctx context.Context, serviceName string, envFallbacks []string) (*resource.Resource, error) {
 	attrs := []attribute.KeyValue{semconv.ServiceName(serviceName)}
 	if v := buildVersion(); v != "" {
 		attrs = append(attrs, semconv.ServiceVersion(v))
 	}
-	if env := os.Getenv("MULGA_ENV"); env != "" {
+	if env := deploymentEnv(envFallbacks); env != "" {
 		// deployment.environment maps to service.environment in Elastic APM,
 		// enabling the native environment selector across the APM UI.
 		attrs = append(attrs,
@@ -165,6 +228,20 @@ func newResource(ctx context.Context, serviceName string) (*resource.Resource, e
 		return nil, err
 	}
 	return res, nil
+}
+
+// deploymentEnv reads MULGA_ENV, then any caller-supplied fallbacks in order,
+// for services whose CI names the deployment environment differently.
+func deploymentEnv(fallbacks []string) string {
+	if env := os.Getenv("MULGA_ENV"); env != "" {
+		return env
+	}
+	for _, key := range fallbacks {
+		if env := os.Getenv(key); env != "" {
+			return env
+		}
+	}
+	return ""
 }
 
 // buildVersion returns the module version or embedded VCS revision, if any.
