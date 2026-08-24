@@ -209,7 +209,9 @@ func TestEvaluateWithKeys_ConditionalDenyRespectsKeys(t *testing.T) {
 		policies, iampolicy.ConditionKeys{iampolicy.KeySecureTransport: "false"}))
 }
 
-// Every operator the allowlist advertises must be one the matcher implements.
+// Spot-check that common AWS operators outside the allowlist stay unsupported.
+// The table-vs-matcher agreement itself is pinned in conditions_internal_test.go,
+// which iterates the allowlist rather than a hardcoded copy.
 func TestSupportedCondition_MatchesImplementedOperators(t *testing.T) {
 	implemented := []string{
 		iampolicy.OpStringEquals, iampolicy.OpStringLike,

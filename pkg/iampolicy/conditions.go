@@ -1,6 +1,7 @@
 package iampolicy
 
 import (
+	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
@@ -86,7 +87,8 @@ func conditionHolds(operator, actual string, values []string) bool {
 }
 
 // ipInAny reports whether actual falls inside any CIDR block or equals any bare
-// address in values. An unparseable address matches nothing.
+// address in values. An unparseable address matches nothing, and an unparseable
+// policy value warns: write paths reject those, so one here predates the fix.
 func ipInAny(actual string, values []string) bool {
 	addr, err := netip.ParseAddr(actual)
 	if err != nil {
@@ -100,7 +102,13 @@ func ipInAny(actual string, values []string) bool {
 			}
 			continue
 		}
-		if other, err := netip.ParseAddr(v); err == nil && other.Unmap() == addr {
+		other, err := netip.ParseAddr(v)
+		if err != nil {
+			slog.Warn("iampolicy: IpAddress condition value is not an address or CIDR block, matching nothing",
+				"value", v, "key", KeySourceIP)
+			continue
+		}
+		if other.Unmap() == addr {
 			return true
 		}
 	}
