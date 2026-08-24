@@ -1,5 +1,11 @@
 package iampolicy
 
+import (
+	"net/netip"
+	"slices"
+	"strings"
+)
+
 // Condition context keys understood by the evaluator. Anything outside this set
 // fails closed; the write path rejects it outright.
 const (
@@ -40,4 +46,71 @@ var supportedConditions = map[string]map[string]bool{
 // evaluator would fail closed on.
 func SupportedCondition(operator, key string) bool {
 	return supportedConditions[key][operator]
+}
+
+// ConditionKeys carries the condition context keys resolved for one request. An
+// absent key evaluates its condition false, so "absent" must stay distinguishable
+// from "present but empty" — a policy written for one data plane's keys therefore
+// simply does not fire on another's.
+type ConditionKeys map[string]string
+
+// conditionsHold reports whether every condition block on the statement is
+// satisfied. Blocks and keys are ANDed; the values within one key are ORed, as
+// AWS specifies.
+func (s *Statement) conditionsHold(keys ConditionKeys) bool {
+	for op, byKey := range s.Condition {
+		for key, values := range byKey {
+			actual, present := keys[key]
+			if !present || !conditionHolds(op, actual, values) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// conditionHolds applies one operator to the request's value for a key. An
+// unrecognized operator returns false; callers reject those before reaching here.
+func conditionHolds(operator, actual string, values []string) bool {
+	switch operator {
+	case OpStringEquals:
+		return slices.Contains(values, actual)
+	case OpBool:
+		for _, v := range values {
+			if strings.EqualFold(v, actual) {
+				return true
+			}
+		}
+	case OpStringLike:
+		for _, v := range values {
+			if MatchWildcard(v, actual) {
+				return true
+			}
+		}
+	case OpIPAddress:
+		return ipInAny(actual, values)
+	}
+	return false
+}
+
+// ipInAny reports whether actual falls inside any of the CIDR blocks or equals
+// any of the bare addresses in values. An unparseable address matches nothing.
+func ipInAny(actual string, values []string) bool {
+	addr, err := netip.ParseAddr(actual)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, v := range values {
+		if prefix, err := netip.ParsePrefix(v); err == nil {
+			if prefix.Masked().Contains(addr) {
+				return true
+			}
+			continue
+		}
+		if other, err := netip.ParseAddr(v); err == nil && other.Unmap() == addr {
+			return true
+		}
+	}
+	return false
 }

@@ -149,7 +149,9 @@ func TestEvaluate_PassRoleResourceARN(t *testing.T) {
 	}
 }
 
-func TestEvaluate_ConditionalAllowFailsClosed(t *testing.T) {
+// Evaluate supplies no context keys, so a conditional Allow cannot fire through
+// it — this is the original bug's reproduction case.
+func TestEvaluate_ConditionalAllowDeniedWithoutKeys(t *testing.T) {
 	d := doc("Allow", "*", "*")
 	d.Statement[0].Sid = "OfficeOnly"
 	d.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
@@ -159,11 +161,13 @@ func TestEvaluate_ConditionalAllowFailsClosed(t *testing.T) {
 		iampolicy.Evaluate("ec2:TerminateInstances", "*", []iampolicy.PolicyDocument{d}))
 }
 
-func TestEvaluate_ConditionalDenyStillDenies(t *testing.T) {
+// A Deny carrying an unenforceable condition fires regardless: dropping it would
+// be the only fail-open direction available.
+func TestEvaluate_UnenforceableDenyStillDenies(t *testing.T) {
 	allow := doc("Allow", "*", "*")
 	deny := doc("Deny", "ec2:TerminateInstances", "*")
 	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
-		"IpAddress": {"aws:SourceIp": {"10.0.0.0/8"}},
+		"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
 	}
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.Evaluate("ec2:TerminateInstances", "*", []iampolicy.PolicyDocument{allow, deny}))
@@ -209,11 +213,11 @@ func TestEvaluate_NotResourceOnlyDenyMatchesEverything(t *testing.T) {
 }
 
 // An unenforceable Deny still has to select the action to fire.
-func TestEvaluate_ConditionalDenyStillScopedByAction(t *testing.T) {
+func TestEvaluate_UnenforceableDenyStillScopedByAction(t *testing.T) {
 	allow := doc("Allow", "*", "*")
 	deny := doc("Deny", "s3:DeleteObject", "*")
 	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
-		"Bool": {"aws:SecureTransport": {"false"}},
+		"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
 	}
 	assert.Equal(t, iampolicy.Allow,
 		iampolicy.Evaluate("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}))
