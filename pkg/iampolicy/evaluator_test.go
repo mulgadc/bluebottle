@@ -148,3 +148,73 @@ func TestEvaluate_PassRoleResourceARN(t *testing.T) {
 		assert.Equal(t, tt.want, iampolicy.Evaluate("iam:PassRole", tt.resource, p), "PassRole on %s", tt.resource)
 	}
 }
+
+func TestEvaluate_ConditionalAllowFailsClosed(t *testing.T) {
+	d := doc("Allow", "*", "*")
+	d.Statement[0].Sid = "OfficeOnly"
+	d.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
+		"IpAddress": {"aws:SourceIp": {"10.0.0.0/8"}},
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("ec2:TerminateInstances", "*", []iampolicy.PolicyDocument{d}))
+}
+
+func TestEvaluate_ConditionalDenyStillDenies(t *testing.T) {
+	allow := doc("Allow", "*", "*")
+	deny := doc("Deny", "ec2:TerminateInstances", "*")
+	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
+		"IpAddress": {"aws:SourceIp": {"10.0.0.0/8"}},
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("ec2:TerminateInstances", "*", []iampolicy.PolicyDocument{allow, deny}))
+}
+
+func TestEvaluate_NotActionAlongsideActionFailsClosed(t *testing.T) {
+	d := doc("Allow", "s3:*", "*")
+	d.Statement[0].NotAction = iampolicy.StringOrArr{"s3:DeleteObject"}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("s3:GetObject", "*", []iampolicy.PolicyDocument{d}))
+}
+
+// A Deny whose only selector is NotAction is inert today and denies everything
+// under the fail-closed rule. Pinned so the behaviour change cannot regress.
+func TestEvaluate_NotActionOnlyDenyMatchesEverything(t *testing.T) {
+	allow := doc("Allow", "*", "*")
+	deny := iampolicy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []iampolicy.Statement{{
+			Effect:    "Deny",
+			NotAction: iampolicy.StringOrArr{"sts:AssumeRole"},
+			Resource:  iampolicy.StringOrArr{"*"},
+		}},
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("sts:AssumeRole", "*", []iampolicy.PolicyDocument{allow, deny}))
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}))
+}
+
+func TestEvaluate_NotResourceOnlyDenyMatchesEverything(t *testing.T) {
+	allow := doc("Allow", "*", "*")
+	deny := iampolicy.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: []iampolicy.Statement{{
+			Effect:      "Deny",
+			Action:      iampolicy.StringOrArr{"s3:*"},
+			NotResource: iampolicy.StringOrArr{"arn:aws:s3:::public/*"},
+		}},
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.Evaluate("s3:GetObject", "arn:aws:s3:::public/a", []iampolicy.PolicyDocument{allow, deny}))
+}
+
+// An unenforceable Deny still has to select the action to fire.
+func TestEvaluate_ConditionalDenyStillScopedByAction(t *testing.T) {
+	allow := doc("Allow", "*", "*")
+	deny := doc("Deny", "s3:DeleteObject", "*")
+	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
+		"Bool": {"aws:SecureTransport": {"false"}},
+	}
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.Evaluate("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}))
+}

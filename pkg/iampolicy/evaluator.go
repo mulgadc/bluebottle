@@ -28,10 +28,7 @@ func Evaluate(action, resource string, policies []PolicyDocument) Decision {
 		for j := range policies[i].Statement {
 			stmt := &policies[i].Statement[j]
 
-			if !matchesAny(stmt.Action, action, true) {
-				continue
-			}
-			if !matchesAny(stmt.Resource, resource, false) {
+			if !stmt.matches(action, resource) {
 				continue
 			}
 			switch stmt.Effect {
@@ -51,4 +48,32 @@ func Evaluate(action, resource string, policies []PolicyDocument) Decision {
 		return Allow
 	}
 	return Deny
+}
+
+// matches reports whether the statement selects action on resource. Constructs
+// the evaluator cannot enforce fail closed: an Allow carrying one is treated as
+// non-matching, a Deny as matching, so an unenforced restriction can only narrow
+// access, never widen it.
+func (s *Statement) matches(action, resource string) bool {
+	if !s.unenforceable() {
+		return matchesAny(s.Action, action, true) && matchesAny(s.Resource, resource, false)
+	}
+
+	slog.Warn("iampolicy.Evaluate: statement carries constructs this release does not enforce, failing closed",
+		"sid", s.Sid, "effect", s.Effect, "action", action)
+	if s.Effect == EffectAllow {
+		return false
+	}
+
+	// Deny, and unrecognized effects, fall through so the caller's Effect switch
+	// still fires. NotAction/NotResource leave the corresponding positive
+	// selector empty, so that half is treated as matching.
+	return (len(s.NotAction) > 0 || matchesAny(s.Action, action, true)) &&
+		(len(s.NotResource) > 0 || matchesAny(s.Resource, resource, false))
+}
+
+// unenforceable reports whether the statement carries a construct outside what
+// this release evaluates.
+func (s *Statement) unenforceable() bool {
+	return len(s.Condition) > 0 || len(s.NotAction) > 0 || len(s.NotResource) > 0
 }
