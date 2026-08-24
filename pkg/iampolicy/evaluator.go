@@ -12,8 +12,8 @@ const (
 	Allow
 )
 
-// Evaluate reports whether action on resource is permitted by the supplied
-// policy documents, following AWS's evaluation order:
+// EvaluateWithKeys reports whether action on resource is permitted by the
+// supplied policy documents, following AWS's evaluation order:
 //
 //  1. Explicit Deny in any statement → Deny (wins immediately).
 //  2. Explicit Allow in any statement → Allow.
@@ -22,15 +22,10 @@ const (
 // Actions match case-insensitively (AWS lower-cases service:verb); resource
 // ARNs match case-sensitively (AWS spec). An unrecognized Effect fails closed to
 // Deny with a warning. Root bypass, if any, is handled by the caller.
-// Conditions are evaluated against no context keys, so any statement carrying
-// one fails closed. Callers that can supply keys use EvaluateWithKeys.
-func Evaluate(action, resource string, policies []PolicyDocument) Decision {
-	return EvaluateWithKeys(action, resource, policies, nil)
-}
-
-// EvaluateWithKeys is Evaluate with the request's condition context keys. A
-// condition on a key the caller cannot supply evaluates false, per AWS, so the
-// same policy legitimately gives different answers at different doors.
+//
+// keys carries the request's condition context keys. A condition on a key the
+// caller cannot supply evaluates false, per AWS, so the same policy legitimately
+// gives different answers at different doors. Passing nil fails every condition.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
 	hasAllow := false
 	for i := range policies {
@@ -46,7 +41,7 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 			case EffectAllow:
 				hasAllow = true
 			default:
-				slog.Warn("iampolicy.Evaluate: unrecognized Effect, treating as Deny",
+				slog.Warn("iampolicy: unrecognized Effect, treating as Deny",
 					"effect", stmt.Effect, "action", action)
 				return Deny
 			}

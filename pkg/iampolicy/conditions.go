@@ -6,18 +6,13 @@ import (
 	"strings"
 )
 
-// Condition context keys understood by the evaluator. Anything outside this set
-// fails closed; the write path rejects it outright.
+// Condition context keys understood by the evaluator. Only the S3 data plane
+// supplies KeyS3Prefix.
 const (
-	// KeySourceIP is the caller's source address, compared with IpAddress.
-	KeySourceIP = "aws:SourceIp"
-	// KeyS3Prefix is the S3 listing prefix. Only the S3 data plane supplies it.
-	KeyS3Prefix = "s3:prefix"
-	// KeySecureTransport reports whether the request arrived over TLS.
-	KeySecureTransport = "aws:SecureTransport"
-	// KeyUsername is the authenticated principal's user name.
-	KeyUsername = "aws:username"
-	// KeyPrincipalAccount is the authenticated principal's account ID.
+	KeySourceIP         = "aws:SourceIp"
+	KeyS3Prefix         = "s3:prefix"
+	KeySecureTransport  = "aws:SecureTransport"
+	KeyUsername         = "aws:username"
 	KeyPrincipalAccount = "aws:PrincipalAccount"
 )
 
@@ -29,9 +24,8 @@ const (
 	OpBool         = "Bool"
 )
 
-// supportedConditions maps each condition key to the operators the evaluator
-// implements for it. aws:MultiFactorAuthPresent is deliberately absent: spinifex
-// has no MFA, so the key could never be true and accepting it would mint a grant
+// aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
+// the stack, so the key could never be true and accepting it would mint a grant
 // that silently never fires.
 var supportedConditions = map[string]map[string]bool{
 	KeySourceIP:         {OpIPAddress: true},
@@ -49,14 +43,12 @@ func SupportedCondition(operator, key string) bool {
 }
 
 // ConditionKeys carries the condition context keys resolved for one request. An
-// absent key evaluates its condition false, so "absent" must stay distinguishable
-// from "present but empty" — a policy written for one data plane's keys therefore
-// simply does not fire on another's.
+// absent key evaluates its condition false, so absent must stay distinguishable
+// from present-but-empty.
 type ConditionKeys map[string]string
 
 // conditionsHold reports whether every condition block on the statement is
-// satisfied. Blocks and keys are ANDed; the values within one key are ORed, as
-// AWS specifies.
+// satisfied. Blocks and keys are ANDed, values within one key ORed, per AWS.
 func (s *Statement) conditionsHold(keys ConditionKeys) bool {
 	for op, byKey := range s.Condition {
 		for key, values := range byKey {
@@ -93,8 +85,8 @@ func conditionHolds(operator, actual string, values []string) bool {
 	return false
 }
 
-// ipInAny reports whether actual falls inside any of the CIDR blocks or equals
-// any of the bare addresses in values. An unparseable address matches nothing.
+// ipInAny reports whether actual falls inside any CIDR block or equals any bare
+// address in values. An unparseable address matches nothing.
 func ipInAny(actual string, values []string) bool {
 	addr, err := netip.ParseAddr(actual)
 	if err != nil {
