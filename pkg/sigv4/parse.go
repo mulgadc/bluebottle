@@ -61,6 +61,7 @@ func Parse(req *http.Request, opts ...parseOption) (*SignedRequest, error) {
 		Credential: credential,
 		Signature:  signature,
 		Canonical:  canonical,
+		req:        req,
 	}, nil
 }
 
@@ -208,7 +209,7 @@ func parseCredential(credential string, t time.Time) (ScopedCredential, error) {
 
 // parseCanonicalRequest assembles and validates the canonical request from req.
 func parseCanonicalRequest(req *http.Request, presigned bool, service string, rawSignedHeaders string) (CanonicalRequest, error) {
-	contentHash, err := resolveContentHash(req, presigned, service)
+	contentHash, mode, err := resolveContentHash(req, presigned, service)
 	if err != nil {
 		return CanonicalRequest{}, err
 	}
@@ -225,39 +226,47 @@ func parseCanonicalRequest(req *http.Request, presigned bool, service string, ra
 		Headers:       headers,
 		SignedHeaders: signedHeaders,
 		ContentHash:   contentHash,
+		PayloadMode:   mode,
 	}, nil
 }
 
-// resolveContentHash returns the hashed payload signed into the canonical request.
-func resolveContentHash(req *http.Request, presigned bool, service string) (string, error) {
+// resolveContentHash returns the hashed payload signed into the canonical request, and the
+// sentinel it stands for when the value is not a literal digest.
+func resolveContentHash(req *http.Request, presigned bool, service string) (string, ContentMode, error) {
 	if service == "s3" {
 		if presigned {
 			// S3 presigned URLs sign the UNSIGNED-PAYLOAD sentinel; the body is not covered.
-			return string(UnsignedPayload), nil
+			return string(UnsignedPayload), UnsignedPayload, nil
 		}
 
 		// S3 mandates x-amz-content-sha256 and signs its value verbatim — a hex digest or
-		// a sentinel.
-		if h := strings.TrimSpace(req.Header.Get("X-Amz-Content-Sha256")); h != "" {
-			return h, nil
+		// a sentinel. Verify binds the body to a digest; a sentinel it must recognise.
+		h := strings.TrimSpace(req.Header.Get("X-Amz-Content-Sha256"))
+		if h == "" {
+			return "", "", ErrMissingContentSHA256
 		}
 
-		return "", ErrMissingContentSHA256
+		mode, err := payloadMode(h)
+		if err != nil {
+			return "", "", err
+		}
+
+		return h, mode, nil
 	}
 
 	// If the request is bodyless, sign the hash of the empty string.
 	if req.Body == nil || req.Body == http.NoBody {
-		return EmptyPayload, nil
+		return EmptyPayload, "", nil
 	}
 
 	// Cap the read so an oversized body can't exhaust memory before authentication.
 	buf, err := io.ReadAll(io.LimitReader(req.Body, MaxPayloadLen+1))
 	if err != nil {
-		return "", fmt.Errorf("reading request body to hash payload: %w", err)
+		return "", "", fmt.Errorf("reading request body to hash payload: %w", err)
 	}
 
 	if int64(len(buf)) > MaxPayloadLen {
-		return "", ErrPayloadTooLarge
+		return "", "", ErrPayloadTooLarge
 	}
 
 	// Rewind the consumed body so the handler can still read it.
@@ -266,7 +275,7 @@ func resolveContentHash(req *http.Request, presigned bool, service string) (stri
 
 	sum := sha256.Sum256(buf)
 
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:]), "", nil
 }
 
 // parseHeaders snapshots the request headers and splits the raw SignedHeaders

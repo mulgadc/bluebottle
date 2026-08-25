@@ -1,7 +1,9 @@
 package sigv4_test
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -114,13 +116,63 @@ var faults = map[string]fault{
 		r.Header.Set("X-Amz-Date", bad)
 		return false, sigv4.ErrRequestTimeInvalid
 	},
-	"tampered payload hash": func(t *rapid.T, r *http.Request, presigned bool, _, _ string) (bool, error) {
+	"tampered payload hash": func(t *rapid.T, r *http.Request, presigned bool, _, service string) (bool, error) {
 		// x-amz-content-sha256 is a header-auth concern; presigned signs UNSIGNED-PAYLOAD.
 		if presigned {
 			return true, nil
 		}
-		r.Header.Set("X-Amz-Content-Sha256", corruptHexDigit(t, r.Header.Get("X-Amz-Content-Sha256")))
+		hash := r.Header.Get("X-Amz-Content-Sha256")
+		r.Header.Set("X-Amz-Content-Sha256", corruptHexDigit(t, hash))
+		// Corrupting a sentinel leaves neither a sentinel nor a digest, which s3 rejects
+		// before it reaches the signature.
+		if service == "s3" && hash == string(sigv4.UnsignedPayload) {
+			return false, sigv4.ErrInvalidContentSHA256
+		}
 		return false, sigv4.ErrSignatureMismatch
+	},
+	"tampered body": func(t *rapid.T, r *http.Request, presigned bool, _, service string) (bool, error) {
+		// Only a signed digest binds the body: presigned and s3 UNSIGNED-PAYLOAD do not.
+		if presigned || r.Header.Get("X-Amz-Content-Sha256") == string(sigv4.UnsignedPayload) {
+			return true, nil
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		_ = r.Body.Close()
+
+		// Flip one byte, or append one to an empty body, leaving the hash header untouched.
+		if len(body) == 0 {
+			body = []byte{rapid.Byte().Draw(t, "injectedByte")}
+		} else {
+			i := rapid.IntRange(0, len(body)-1).Draw(t, "bodyIndex")
+			body[i] ^= byte(rapid.IntRange(1, 255).Draw(t, "bodyFlip"))
+		}
+
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		if service != "s3" {
+			// Non-s3 hashes the body into the canonical request, so the signature breaks.
+			return false, sigv4.ErrSignatureMismatch
+		}
+
+		return false, sigv4.ErrContentSHA256Mismatch
+	},
+	"unrecognised content-sha256 sentinel": func(t *rapid.T, r *http.Request, presigned bool, _, service string) (bool, error) {
+		// x-amz-content-sha256 is only authoritative for header-authed s3.
+		if presigned || service != "s3" {
+			return true, nil
+		}
+
+		sentinel := rapid.SampledFrom([]string{"UNSIGNED", "STREAMING-PAYLOAD", "SHA256", "", "not-a-digest"}).Draw(t, "sentinel")
+		r.Header.Set("X-Amz-Content-Sha256", sentinel)
+		// An empty value reads as the header being absent, which s3 rejects outright.
+		if sentinel == "" {
+			return false, sigv4.ErrMissingContentSHA256
+		}
+
+		return false, sigv4.ErrInvalidContentSHA256
 	},
 	"removed content-sha256": func(_ *rapid.T, r *http.Request, presigned bool, _, service string) (bool, error) {
 		// Presigned requests carry no content-sha256 header to remove.

@@ -2,6 +2,7 @@ package sigv4
 
 import (
 	"errors"
+	"net/http"
 	"time"
 )
 
@@ -30,6 +31,17 @@ const (
 	// UnsignedPayload indicates that the request body is not covered by the signature.
 	// S3 only.
 	UnsignedPayload ContentMode = "UNSIGNED-PAYLOAD"
+
+	// StreamingSigned marks an aws-chunked body whose chunks carry their own signatures,
+	// chained from the seed signature. S3 only.
+	StreamingSigned ContentMode = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+
+	// StreamingSignedTrailer is StreamingSigned with a trailing checksum header.
+	StreamingSignedTrailer ContentMode = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+
+	// StreamingUnsignedTrailer marks an aws-chunked body with a trailing checksum but no
+	// per-chunk signatures, so the body is not covered by the signature.
+	StreamingUnsignedTrailer ContentMode = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 
 	// EmptyPayload is the hex SHA-256 of an empty body, signed by a bodyless non-S3 request.
 	EmptyPayload string = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -79,6 +91,15 @@ var (
 	// the x-amz-content-sha256 header.
 	ErrMissingContentSHA256 = errors.New("missing x-amz-content-sha256 header")
 
+	// ErrInvalidContentSHA256 is returned when an S3 request's x-amz-content-sha256 is
+	// neither a hex SHA-256 digest nor a recognised ContentMode sentinel.
+	ErrInvalidContentSHA256 = errors.New("invalid x-amz-content-sha256 header")
+
+	// ErrContentSHA256Mismatch is returned when the request body does not hash to the
+	// digest signed in x-amz-content-sha256. For a body verified as it streams, it
+	// surfaces from the consumer's final Read rather than from Verify.
+	ErrContentSHA256Mismatch = errors.New("request body does not match x-amz-content-sha256")
+
 	// ErrPayloadTooLarge is returned when a non-S3 request's body exceeds the size
 	// Parse will buffer to derive the signed content hash.
 	ErrPayloadTooLarge = errors.New("request payload exceeds maximum size for hashing")
@@ -110,6 +131,10 @@ type SignedRequest struct {
 	Algorithm  Algorithm
 	Timestamp  time.Time
 	Signature  string
+
+	// req is the request Parse read, retained so Verify can bind its body to the signed
+	// content hash once the signature checks out.
+	req *http.Request
 }
 
 // CanonicalRequest holds the parsed components of the SigV4 canonical request.
@@ -127,6 +152,11 @@ type CanonicalRequest struct {
 	// a mode sentinel, a hex digest, or empty for a non-S3 request that omits
 	// x-amz-content-sha256.
 	ContentHash string
+	// PayloadMode is the sentinel the client signed in place of a payload hash, and is
+	// empty when ContentHash is a literal digest. Every sentinel leaves the body outside
+	// this package's verification: UnsignedPayload by design, the streaming modes because
+	// their per-chunk framing is the caller's to check.
+	PayloadMode ContentMode
 }
 
 // ScopedCredential is the parsed "<AKID>/YYYYMMDD/region/service/aws4_request"

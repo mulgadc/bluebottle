@@ -1,6 +1,7 @@
 package sigv4_test
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +38,8 @@ func TestKnownAnswers(t *testing.T) {
 		query         map[string]string
 		headers       map[string]string
 		signedHeaders []string
-		contentLength int64 // signed content-length header, when non-zero
+		body          string // request body, for a fixture that signs its digest
+		contentLength int64  // signed content-length header, when non-zero
 		signature     string
 	}{
 		{
@@ -58,6 +60,9 @@ func TestKnownAnswers(t *testing.T) {
 			method: http.MethodPut,
 			host:   "examplebucket.s3.amazonaws.com",
 			uri:    "/test%24file.text",
+			// The body AWS's example signs; content-length is unsigned here, so carrying it
+			// leaves the published signature intact.
+			body: "Welcome to Amazon S3.",
 			headers: map[string]string{
 				"date":                 "Fri, 24 May 2013 00:00:00 GMT",
 				"x-amz-content-sha256": "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072",
@@ -154,7 +159,12 @@ func TestKnownAnswers(t *testing.T) {
 				rawURL += "?" + encoded
 			}
 
-			req, err := http.NewRequest(tc.method, rawURL, nil)
+			var body io.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+
+			req, err := http.NewRequest(tc.method, rawURL, body)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
 			}

@@ -30,6 +30,11 @@ func (req *SignedRequest) Verify(secretAccessKey, region, service string) (*Veri
 		return nil, ErrSignatureMismatch
 	}
 
+	// The signature covers the declared payload hash; binding makes it cover the body too.
+	if err := req.bindPayload(); err != nil {
+		return nil, err
+	}
+
 	return &VerifiedRequest{SignedRequest: req, SigningKey: signingKey}, nil
 }
 
