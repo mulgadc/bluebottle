@@ -1,6 +1,9 @@
 package iampolicy
 
-import "log/slog"
+import (
+	"bytes"
+	"log/slog"
+)
 
 // Decision represents the outcome of a policy evaluation.
 type Decision int
@@ -80,14 +83,19 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
 }
 
 // unenforceable returns the first construct on the statement that this release
-// cannot evaluate, for the fail-closed warning. NotAction and NotResource report
-// themselves in the operator position; they have no key.
+// cannot evaluate, for the fail-closed warning. NotAction, NotResource and
+// Principal report themselves in the operator position; they have no key.
 func (s *Statement) unenforceable() (operator, key string, found bool) {
 	if len(s.NotAction) > 0 {
 		return "NotAction", "", true
 	}
 	if len(s.NotResource) > 0 {
 		return "NotResource", "", true
+	}
+	// A JSON null counts as absent, so a document that merely spells the field
+	// out is not forced down the fail-closed path.
+	if p := bytes.TrimSpace(s.Principal); len(p) > 0 && !bytes.Equal(p, []byte("null")) {
+		return "Principal", "", true
 	}
 	for op, byKey := range s.Condition {
 		for k := range byKey {

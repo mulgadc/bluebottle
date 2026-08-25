@@ -1,10 +1,12 @@
 package iampolicy_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mulgadc/bluebottle/pkg/iampolicy"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // doc builds a single-statement policy document.
@@ -210,6 +212,45 @@ func TestEvaluate_NotResourceOnlyDenyMatchesEverything(t *testing.T) {
 	}
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", []iampolicy.PolicyDocument{allow, deny}, nil))
+}
+
+// A resource-policy document evaluated as an identity policy must not grant:
+// Principal is not enforced here, so an Allow carrying one fails closed.
+func TestEvaluate_PrincipalAllowFailsClosed(t *testing.T) {
+	d := doc("Allow", "s3:*", "*")
+	d.Statement[0].Principal = json.RawMessage(`{"AWS":"arn:aws:iam::999999999999:root"}`)
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{d}, nil))
+}
+
+// The same statement as a Deny still fires, so an unenforced Principal can only
+// narrow access.
+func TestEvaluate_PrincipalDenyStillDenies(t *testing.T) {
+	allow := doc("Allow", "*", "*")
+	deny := doc("Deny", "s3:*", "*")
+	deny.Statement[0].Principal = json.RawMessage(`{"AWS":"arn:aws:iam::999999999999:root"}`)
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
+}
+
+// A spelled-out null Principal is absent, not a construct to fail closed on.
+func TestEvaluate_NullPrincipalStillAllows(t *testing.T) {
+	d := doc("Allow", "s3:*", "*")
+	d.Statement[0].Principal = json.RawMessage(`null`)
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{d}, nil))
+}
+
+// The document as it arrives over the wire takes the same path.
+func TestEvaluate_PrincipalFromJSONFailsClosed(t *testing.T) {
+	var d iampolicy.PolicyDocument
+	require.NoError(t, json.Unmarshal([]byte(`{"Version":"2012-10-17","Statement":[
+		{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::999999999999:root"},
+		 "Action":"s3:*","Resource":"*"}]}`), &d))
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{d}, nil))
 }
 
 // An unenforceable Deny still has to select the action to fire.
