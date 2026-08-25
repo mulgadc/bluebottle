@@ -17,12 +17,12 @@ import (
 
 // signS3 signs a PUT of body against the oracle credentials, sending payloadHash as
 // x-amz-content-sha256. A caller passes a sentinel, or a digest that need not match body.
-func signS3(t *testing.T, body []byte, payloadHash string) *http.Request {
-	t.Helper()
+func signS3(tb testing.TB, body []byte, payloadHash string) *http.Request {
+	tb.Helper()
 
 	req, err := http.NewRequest(http.MethodPut, "https://"+oracleHost+"/object.txt", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("build request: %v", err)
+		tb.Fatalf("build request: %v", err)
 	}
 
 	req.ContentLength = int64(len(body))
@@ -30,7 +30,7 @@ func signS3(t *testing.T, body []byte, payloadHash string) *http.Request {
 
 	creds := aws.Credentials{AccessKeyID: oracleAKID, SecretAccessKey: oracleSecret}
 	if err := v4.NewSigner().SignHTTP(context.Background(), creds, req, payloadHash, "s3", "us-east-1", oracleTime, s3Opts("s3")...); err != nil {
-		t.Fatalf("SignHTTP: %v", err)
+		tb.Fatalf("SignHTTP: %v", err)
 	}
 
 	return req

@@ -54,8 +54,16 @@ func (req *SignedRequest) bindPayload() error {
 	// A body of known, modest size verifies here, so a tampered payload fails authentication
 	// outright. Anything larger or of unknown length streams instead of being buffered.
 	if length := req.req.ContentLength; length >= 0 && length <= MaxPayloadLen {
-		buf, err := io.ReadAll(io.LimitReader(body, length))
-		if err != nil {
+		// ContentLength is the exact size, so the buffer is allocated once. io.ReadAll would
+		// grow by repeated doubling instead, allocating about twice the body.
+		buf := make([]byte, length)
+		if _, err := io.ReadFull(body, buf); err != nil {
+			// A body shorter than its declared length cannot hash to the signed digest, so
+			// it fails the same way a rewritten one does rather than as a read error.
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				return ErrContentSHA256Mismatch
+			}
+
 			return fmt.Errorf("reading request body to verify payload hash: %w", err)
 		}
 
