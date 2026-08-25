@@ -1,8 +1,11 @@
 package otelsetup
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -35,6 +38,41 @@ func (w *statusRecorder) WriteHeader(code int) {
 func (w *statusRecorder) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
 	w.written += int64(n)
+	return n, err
+}
+
+// Unwrap returns the wrapped ResponseWriter, letting http.ResponseController
+// (and any other Unwrap-aware caller) walk past statusRecorder to reach the
+// real writer underneath.
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Flush implements http.Flusher by delegating to the wrapped ResponseWriter.
+// Without this, statusRecorder blocks every downstream Flush call from ever
+// reaching the real writer: the call succeeds as a no-op but no bytes reach
+// the socket, silently breaking streaming handlers.
+func (w *statusRecorder) Flush() {
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Hijack implements http.Hijacker so websocket and CONNECT upgrades survive
+// the wrapper. Bytes written to the raw connection are outside the span's
+// accounting.
+func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// ReadFrom implements io.ReaderFrom so writers offering a sendfile fast path
+// keep it, and still counts the bytes. Falls back to a plain copy when the
+// wrapped writer has no ReadFrom of its own.
+func (w *statusRecorder) ReadFrom(r io.Reader) (int64, error) {
+	var n int64
+	var err error
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		n, err = rf.ReadFrom(r)
+	} else {
+		n, err = io.Copy(w.ResponseWriter, r)
+	}
+	w.written += n
 	return n, err
 }
 

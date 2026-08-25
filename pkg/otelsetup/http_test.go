@@ -1,8 +1,12 @@
 package otelsetup
 
 import (
+	"bufio"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -21,6 +25,127 @@ func withRecorder(t *testing.T) *tracetest.SpanRecorder {
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)))
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 	return sr
+}
+
+// flushCounter is a ResponseWriter whose Flush is observable, standing in for
+// the real writer beneath the middleware.
+type flushCounter struct {
+	http.ResponseWriter
+
+	flushes int
+}
+
+func (w *flushCounter) Flush() { w.flushes++ }
+
+func TestStatusRecorderForwardsFlush(t *testing.T) {
+	inner := &flushCounter{ResponseWriter: httptest.NewRecorder()}
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	f, ok := any(rec).(http.Flusher)
+	if !ok {
+		t.Fatal("statusRecorder does not satisfy http.Flusher")
+	}
+	f.Flush()
+	if inner.flushes != 1 {
+		t.Errorf("direct Flush reached inner writer %d times, want 1", inner.flushes)
+	}
+
+	if err := http.NewResponseController(rec).Flush(); err != nil {
+		t.Fatalf("ResponseController.Flush: %v", err)
+	}
+	if inner.flushes != 2 {
+		t.Errorf("ResponseController.Flush reached inner writer %d times, want 2", inner.flushes)
+	}
+}
+
+func TestStatusRecorderUnwrapsToInnerWriter(t *testing.T) {
+	inner := httptest.NewRecorder()
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	u, ok := any(rec).(interface{ Unwrap() http.ResponseWriter })
+	if !ok {
+		t.Fatal("statusRecorder has no Unwrap method")
+	}
+	if u.Unwrap() != http.ResponseWriter(inner) {
+		t.Error("Unwrap did not return the wrapped writer")
+	}
+}
+
+// hijackWriter stands in for a writer that supports connection takeover.
+type hijackWriter struct {
+	http.ResponseWriter
+
+	conn net.Conn
+}
+
+func (w *hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func TestStatusRecorderForwardsHijack(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	inner := &hijackWriter{ResponseWriter: httptest.NewRecorder(), conn: server}
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	h, ok := any(rec).(http.Hijacker)
+	if !ok {
+		t.Fatal("statusRecorder does not satisfy http.Hijacker")
+	}
+	conn, _, err := h.Hijack()
+	if err != nil {
+		t.Fatalf("Hijack: %v", err)
+	}
+	if conn != server {
+		t.Error("Hijack did not return the inner writer's connection")
+	}
+}
+
+// readerFromWriter reports whether the sendfile-style fast path was taken.
+type readerFromWriter struct {
+	http.ResponseWriter
+
+	used bool
+}
+
+func (w *readerFromWriter) ReadFrom(r io.Reader) (int64, error) {
+	w.used = true
+	return io.Copy(w.ResponseWriter, r)
+}
+
+// plainReader hides strings.Reader's WriteTo, which io.Copy would otherwise
+// prefer over the destination's ReadFrom.
+type plainReader struct{ io.Reader }
+
+func TestStatusRecorderReadFromCountsAndDelegates(t *testing.T) {
+	inner := &readerFromWriter{ResponseWriter: httptest.NewRecorder()}
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	n, err := io.Copy(rec, plainReader{strings.NewReader("hello world")})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if !inner.used {
+		t.Error("ReadFrom fast path not delegated to the wrapped writer")
+	}
+	if n != 11 || rec.written != 11 {
+		t.Errorf("copied = %d, written = %d, want 11 and 11", n, rec.written)
+	}
+}
+
+func TestStatusRecorderReadFromWithoutFastPath(t *testing.T) {
+	inner := httptest.NewRecorder()
+	rec := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+
+	if _, err := io.Copy(rec, plainReader{strings.NewReader("abc")}); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if got := inner.Body.String(); got != "abc" {
+		t.Errorf("body = %q, want %q", got, "abc")
+	}
+	if rec.written != 3 {
+		t.Errorf("written = %d, want 3", rec.written)
+	}
 }
 
 func TestHTTPMiddlewareSpanPerRequest(t *testing.T) {
