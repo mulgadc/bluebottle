@@ -2,39 +2,46 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
-// ParseRoleARN extracts the account ID and role name from an IAM role ARN of
-// the form arn:aws:iam::<accountID>:role/<path>/<name> (path optional). The
-// name is the segment after the final "/". A malformed ARN — wrong prefix,
-// non-role resource, empty name, or empty account — returns an error; callers
-// that must fail closed treat any error as an implicit deny.
-func ParseRoleARN(arn string) (accountID, name string, err error) {
+// parseIAMARN extracts the account ID and resource name from an IAM ARN of the
+// form arn:aws:iam::<accountID>:<resource>/<path>/<name> (path optional). The
+// name is the segment after the final "/".
+func parseIAMARN(arn, resource string) (accountID, name string, err error) {
 	parts := strings.SplitN(arn, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "iam" || parts[3] != "" {
 		return "", "", errors.New("not an IAM ARN")
 	}
-	const prefix = "role/"
-	resource := parts[5]
-	if !strings.HasPrefix(resource, prefix) {
-		return "", "", errors.New("ARN resource is not a role")
+	prefix := resource + "/"
+	if !strings.HasPrefix(parts[5], prefix) {
+		return "", "", fmt.Errorf("ARN resource is not a %s", resource)
 	}
-	pathAndName := resource[len(prefix):]
+	pathAndName := parts[5][len(prefix):]
 	if slash := strings.LastIndex(pathAndName, "/"); slash >= 0 {
 		name = pathAndName[slash+1:]
 	} else {
 		name = pathAndName
 	}
 	if name == "" {
-		return "", "", errors.New("role name is empty")
+		return "", "", fmt.Errorf("%s name is empty", resource)
 	}
-	// A real IAM role ARN always carries a non-empty account, so an empty
-	// account segment is malformed; reject it so callers fail closed.
+	// A real IAM ARN always carries a non-empty account, so an empty account
+	// segment is malformed; reject it so callers fail closed.
 	if parts[4] == "" {
 		return "", "", errors.New("account ID is empty")
 	}
 	return parts[4], name, nil
+}
+
+// ParseRoleARN extracts the account ID and role name from an IAM role ARN of
+// the form arn:aws:iam::<accountID>:role/<path>/<name> (path optional). A
+// malformed ARN — wrong prefix, non-role resource, empty name, or empty
+// account — returns an error; callers that must fail closed treat any error as
+// an implicit deny.
+func ParseRoleARN(arn string) (accountID, name string, err error) {
+	return parseIAMARN(arn, "role")
 }
 
 // AWSManagedPolicyARNPrefix is the prefix of an AWS-managed policy ARN, whose
@@ -42,34 +49,11 @@ func ParseRoleARN(arn string) (accountID, name string, err error) {
 const AWSManagedPolicyARNPrefix = "arn:aws:iam::aws:policy/"
 
 // ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
-// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). The
-// name is the segment after the final "/". A malformed ARN — wrong prefix,
-// non-policy resource, empty name, or empty account — returns an error; callers
-// that must fail closed treat any error as an implicit deny. An AWS-managed ARN
-// parses with accountID "aws"; use IsAWSManagedPolicyARN to distinguish it.
+// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). It
+// fails closed on a malformed ARN exactly as ParseRoleARN does. An AWS-managed
+// ARN parses with accountID "aws"; use IsAWSManagedPolicyARN to distinguish it.
 func ParsePolicyARN(arn string) (accountID, name string, err error) {
-	parts := strings.SplitN(arn, ":", 6)
-	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "iam" || parts[3] != "" {
-		return "", "", errors.New("not an IAM ARN")
-	}
-	const prefix = "policy/"
-	resource := parts[5]
-	if !strings.HasPrefix(resource, prefix) {
-		return "", "", errors.New("ARN resource is not a policy")
-	}
-	pathAndName := resource[len(prefix):]
-	if slash := strings.LastIndex(pathAndName, "/"); slash >= 0 {
-		name = pathAndName[slash+1:]
-	} else {
-		name = pathAndName
-	}
-	if name == "" {
-		return "", "", errors.New("policy name is empty")
-	}
-	if parts[4] == "" {
-		return "", "", errors.New("account ID is empty")
-	}
-	return parts[4], name, nil
+	return parseIAMARN(arn, "policy")
 }
 
 // IsAWSManagedPolicyARN reports whether arn names an AWS-managed policy, which
