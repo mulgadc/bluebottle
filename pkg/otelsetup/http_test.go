@@ -2,6 +2,7 @@ package otelsetup
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -196,6 +197,119 @@ func TestHTTPMiddleware5xxSetsErrorStatus(t *testing.T) {
 	}
 	if spans[0].Status().Code != codes.Error {
 		t.Errorf("span status = %v, want Error on 5xx", spans[0].Status().Code)
+	}
+}
+
+// TestOutcomeForStatusSeparatesClientErrors guards the classification the
+// dashboards split on: 4xx must not be counted as success (which hid every
+// 401 and 404) and must not be folded into error, which is server fault.
+func TestOutcomeForStatusSeparatesClientErrors(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{status: http.StatusOK, want: "success"},
+		{status: http.StatusNoContent, want: "success"},
+		{status: http.StatusNotModified, want: "success"},
+		{status: http.StatusBadRequest, want: "client_error"},
+		{status: http.StatusUnauthorized, want: "client_error"},
+		{status: http.StatusForbidden, want: "client_error"},
+		{status: http.StatusNotFound, want: "client_error"},
+		{status: http.StatusInternalServerError, want: "error"},
+		{status: http.StatusBadGateway, want: "error"},
+	}
+
+	for _, tc := range tests {
+		if got := OutcomeForStatus(tc.status); got != tc.want {
+			t.Errorf("OutcomeForStatus(%d) = %q, want %q", tc.status, got, tc.want)
+		}
+	}
+}
+
+// TestHTTPMiddleware4xxIsNotSpanError pins the split between the two signals:
+// a client error is a distinct metric outcome but must not mark the span
+// failed, or every 404 would show as a broken request in the trace view.
+func TestHTTPMiddleware4xxIsNotSpanError(t *testing.T) {
+	sr := withRecorder(t)
+
+	h := HTTPMiddleware("test")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/latest/api/token", nil))
+
+	spans := sr.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if got := spans[0].Status().Code; got == codes.Error {
+		t.Errorf("span status = %v, want not Error for a 4xx", got)
+	}
+}
+
+func TestWithUntracedPathsSkipsSpanButStillRecords(t *testing.T) {
+	sr := withRecorder(t)
+	var got []RequestMetric
+
+	h := HTTPMiddleware("test-server",
+		WithUntracedPaths("/health"),
+		WithRecorder(func(_ context.Context, m RequestMetric) { got = append(got, m) }),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if trace.SpanContextFromContext(r.Context()).IsValid() {
+			t.Error("untraced path rooted a span")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if spans := sr.Ended(); len(spans) != 0 {
+		t.Fatalf("ended spans = %d, want 0", len(spans))
+	}
+	if len(got) != 1 {
+		t.Fatalf("recorded metrics = %d, want 1", len(got))
+	}
+	if got[0].Action != "GET /health" {
+		t.Errorf("action = %q, want %q", got[0].Action, "GET /health")
+	}
+	if got[0].Outcome != "success" || got[0].StatusCode != http.StatusNoContent {
+		t.Errorf("outcome/status = %q/%d, want success/204", got[0].Outcome, got[0].StatusCode)
+	}
+}
+
+// TestWithUntracedPathsLeavesOtherPathsTraced keeps the skip path-scoped: an
+// option meant for probes must not silently untrace the whole server.
+func TestWithUntracedPathsLeavesOtherPathsTraced(t *testing.T) {
+	sr := withRecorder(t)
+
+	h := HTTPMiddleware("test-server", WithUntracedPaths("/health"))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/other", nil))
+
+	if spans := sr.Ended(); len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+}
+
+func TestWithRecorderReplacesTheMetricSink(t *testing.T) {
+	withRecorder(t)
+	var got []RequestMetric
+
+	h := HTTPMiddleware("test-server",
+		WithRecorder(func(_ context.Context, m RequestMetric) { got = append(got, m) }),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		SetRequestAction(r.Context(), "GetObject")
+		SetRequestErrorCode(r.Context(), "NoSuchKey")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/b/k", nil))
+
+	if len(got) != 1 {
+		t.Fatalf("recorded metrics = %d, want 1", len(got))
+	}
+	if got[0].Action != "GetObject" || got[0].ErrorCode != "NoSuchKey" {
+		t.Errorf("action/error = %q/%q, want GetObject/NoSuchKey", got[0].Action, got[0].ErrorCode)
+	}
+	if got[0].Outcome != "client_error" {
+		t.Errorf("outcome = %q, want client_error", got[0].Outcome)
 	}
 }
 
