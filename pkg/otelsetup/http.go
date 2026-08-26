@@ -76,43 +76,101 @@ func (w *statusRecorder) ReadFrom(r io.Reader) (int64, error) {
 	return n, err
 }
 
+// OutcomeForStatus classifies a response for the outcome dimension. 4xx is
+// client_error rather than error so a service's error rate stays server-fault
+// only, while client rejections (an unauthorized token request, a missing key)
+// stop being counted as successes. Exported so non-HTTP transports can classify
+// against the same statuses and the two agree.
+func OutcomeForStatus(status int) string {
+	switch {
+	case status >= http.StatusInternalServerError:
+		return "error"
+	case status >= http.StatusBadRequest:
+		return "client_error"
+	default:
+		return "success"
+	}
+}
+
+// MiddlewareOption adjusts HTTPMiddleware for one service's conventions.
+type MiddlewareOption func(*middlewareConfig)
+
+type middlewareConfig struct {
+	untraced map[string]struct{}
+	record   func(context.Context, RequestMetric)
+}
+
+// WithUntracedPaths serves and measures the given request paths without
+// rooting a span. Health probes fire every few seconds per service and would
+// otherwise start a trace each, burying real requests.
+func WithUntracedPaths(paths ...string) MiddlewareOption {
+	return func(c *middlewareConfig) {
+		if c.untraced == nil {
+			c.untraced = make(map[string]struct{}, len(paths))
+		}
+		for _, p := range paths {
+			c.untraced[p] = struct{}{}
+		}
+	}
+}
+
+// WithRecorder replaces the metric sink, letting a service record onto its own
+// instruments and attribute keys instead of this package's RecordRequest.
+func WithRecorder(fn func(context.Context, RequestMetric)) MiddlewareOption {
+	return func(c *middlewareConfig) {
+		if fn != nil {
+			c.record = fn
+		}
+	}
+}
+
 // HTTPMiddleware opens a server span per request, honoring an inbound W3C
 // traceparent header, and records request count/duration metrics. Handlers
 // rename the span (and SetRequestAction) once they resolve a logical
 // operation (e.g. the S3 action). No-op unless Init configured export.
-func HTTPMiddleware(serverName string) func(http.Handler) http.Handler {
+func HTTPMiddleware(serverName string, opts ...MiddlewareOption) func(http.Handler) http.Handler {
+	cfg := middlewareConfig{record: RecordRequest}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 			action := &requestAction{name: r.Method}
 			ctx = context.WithValue(ctx, requestActionKey{}, action)
-			ctx, span := otel.Tracer(httpTracerName).Start(ctx, r.Method+" "+r.URL.Path,
-				trace.WithSpanKind(trace.SpanKindServer),
-				trace.WithAttributes(
-					semconv.HTTPRequestMethodKey.String(r.Method),
-					semconv.URLPath(r.URL.Path),
-					attribute.String("server.name", serverName),
-				))
-			defer span.End()
+
+			var span trace.Span
+			if _, skip := cfg.untraced[r.URL.Path]; skip {
+				action.name = r.Method + " " + r.URL.Path
+				span = trace.SpanFromContext(ctx)
+			} else {
+				ctx, span = otel.Tracer(httpTracerName).Start(ctx, r.Method+" "+r.URL.Path,
+					trace.WithSpanKind(trace.SpanKindServer),
+					trace.WithAttributes(
+						semconv.HTTPRequestMethodKey.String(r.Method),
+						semconv.URLPath(r.URL.Path),
+						attribute.String("server.name", serverName),
+					))
+				defer span.End()
+			}
 
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r.WithContext(ctx))
 
 			span.SetAttributes(semconv.HTTPResponseStatusCode(rec.status))
-			outcome := "success"
 			if rec.status >= http.StatusInternalServerError {
 				span.SetStatus(codes.Error, fmt.Sprintf("HTTP %d", rec.status))
-				outcome = "error"
 			}
 
 			// Content-Length is read from the header set before the body was
 			// consumed; -1 (unknown/chunked) is left unrecorded rather than
 			// forcing a body read to measure it.
 			reqBytes := max(r.ContentLength, 0)
-			RecordRequest(ctx, RequestMetric{
+			cfg.record(ctx, RequestMetric{
 				Action:     action.name,
-				Outcome:    outcome,
+				Outcome:    OutcomeForStatus(rec.status),
 				StatusCode: rec.status,
 				ErrorCode:  action.errorCode,
 				ReqBytes:   reqBytes,
