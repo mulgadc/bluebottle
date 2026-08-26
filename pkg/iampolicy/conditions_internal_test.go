@@ -31,7 +31,7 @@ func TestSupportedConditions_EveryAdvertisedOperatorIsImplemented(t *testing.T) 
 			}
 			sample, ok := matcherSamples[op]
 			require.True(t, ok, "operator %q advertised on key %q has no matcher sample", op, key)
-			assert.True(t, conditionHolds(op, sample.actual, sample.values, nil),
+			assert.True(t, conditionHolds(op, sample.actual, sample.values, nil, false),
 				"operator %q advertised on key %q but conditionHolds never matches", op, key)
 		}
 	}

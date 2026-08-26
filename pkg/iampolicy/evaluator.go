@@ -31,8 +31,8 @@ const (
 // gives different answers at different doors. Passing nil fails every condition.
 //
 // Resource patterns and string condition values may carry ${key} policy
-// variables, resolved from keys. An unresolvable one makes the statement
-// non-matching, for Allow and Deny alike.
+// variables, resolved from keys. An unresolvable one fails closed: it makes an
+// Allow non-matching and a Deny matching, so it can only narrow access.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
 	hasAllow := false
 	for i := range policies {
@@ -66,6 +66,10 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 // treated as non-matching, a Deny as matching, so an unenforced restriction can
 // only narrow access, never widen it.
 func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
+	// The same rule covers a policy variable this door cannot supply: an Allow
+	// carrying one selects nothing, a Deny selects everything it might have.
+	failClosed := s.Effect != EffectAllow
+
 	if operator, key, found := s.unenforceable(); found {
 		slog.Warn("iampolicy: statement carries a construct this release does not enforce, failing closed",
 			"sid", s.Sid, "effect", s.Effect, "action", action,
@@ -78,12 +82,12 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
 		// switch still fires. NotAction/NotResource leave the corresponding
 		// positive selector empty, so that half is treated as matching.
 		return (len(s.NotAction) > 0 || matchesAny(s.Action, action, true)) &&
-			(len(s.NotResource) > 0 || matchesAnyResource(s.Resource, resource, keys))
+			(len(s.NotResource) > 0 || matchesAnyResource(s.Resource, resource, keys, failClosed))
 	}
 
 	return matchesAny(s.Action, action, true) &&
-		matchesAnyResource(s.Resource, resource, keys) &&
-		s.conditionsHold(keys)
+		matchesAnyResource(s.Resource, resource, keys, failClosed) &&
+		s.conditionsHold(keys, failClosed)
 }
 
 // unenforceable returns the first construct on the statement that this release

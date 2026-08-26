@@ -141,39 +141,58 @@ func TestMatchGlob_Escapes(t *testing.T) {
 	}
 }
 
-// The resource path: variables resolve, and an unresolvable one matches nothing.
+// The resource path with failClosed off, the Allow arm: variables resolve, and
+// an unresolvable one matches nothing.
 func TestMatchesAnyResource(t *testing.T) {
 	patterns := []string{"arn:aws:s3:::home/${aws:username}/*"}
 
-	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/alice/object", aliceKeys))
-	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", aliceKeys))
-	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/alice/object", nil))
+	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/alice/object", aliceKeys, false))
+	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", aliceKeys, false))
+	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/alice/object", nil, false))
 
 	// A username holding a metacharacter is matched literally.
 	star := ConditionKeys{KeyUsername: "*"}
-	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", star))
-	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/*/object", star))
+	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", star, false))
+	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/*/object", star, false))
 
 	// Patterns without a reference behave exactly as before, including a
 	// backslash, which the IAM grammar treats as an ordinary literal.
-	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::*"}, "arn:aws:s3:::any", nil))
-	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b"}, "arn:aws:s3:::B", nil))
-	assert.True(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, `arn:aws:s3:::b/a\bx`, nil))
-	assert.False(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, "arn:aws:s3:::b/abx", nil))
+	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::*"}, "arn:aws:s3:::any", nil, false))
+	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b"}, "arn:aws:s3:::B", nil, false))
+	assert.True(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, `arn:aws:s3:::b/a\bx`, nil, false))
+	assert.False(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, "arn:aws:s3:::b/abx", nil, false))
 
 	// Unsupported and malformed references match nothing, including resources
 	// containing the placeholder text literally.
 	env := []string{"arn:aws:s3:::b/${env}/*"}
-	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/${env}/config", aliceKeys))
-	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/prod/config", aliceKeys))
-	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::b/${env", nil))
+	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/${env}/config", aliceKeys, false))
+	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/prod/config", aliceKeys, false))
+	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::b/${env", nil, false))
 
 	// One unresolvable pattern does not veto the rest of the list.
 	mixed := []string{"arn:aws:s3:::home/${aws:username}/*", "arn:aws:s3:::public/*"}
-	assert.True(t, matchesAnyResource(mixed, "arn:aws:s3:::public/x", nil))
+	assert.True(t, matchesAnyResource(mixed, "arn:aws:s3:::public/x", nil, false))
 
 	// Case-sensitive, like the resource half of matchesAny.
-	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/ALICE/object", aliceKeys))
+	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/ALICE/object", aliceKeys, false))
+}
+
+// The Deny arm: an unresolvable reference matches, so the restriction survives a
+// door that cannot supply the key rather than silently disappearing.
+func TestMatchesAnyResource_FailClosedMatchesUnresolvable(t *testing.T) {
+	patterns := []string{"arn:aws:s3:::home/${aws:username}/*"}
+
+	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", nil, true))
+	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env}/*"}, "arn:aws:s3:::b/prod/x", nil, true))
+	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::anything", nil, true))
+
+	// A resolvable reference is unaffected: it still matches on its own terms,
+	// so failing closed never widens a Deny past the resources it names.
+	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/alice/object", aliceKeys, true))
+	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", aliceKeys, true))
+
+	// A pattern with no reference at all is untouched by failClosed.
+	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::other/*"}, "arn:aws:s3:::b/x", nil, true))
 }
 
 // TestMatchesAny covers the case-fold flag: actions fold (true), resources are

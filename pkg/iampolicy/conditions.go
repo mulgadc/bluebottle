@@ -51,11 +51,14 @@ type ConditionKeys map[string]string
 
 // conditionsHold reports whether every condition block on the statement is
 // satisfied. Blocks and keys are ANDed, values within one key ORed, per AWS.
-func (s *Statement) conditionsHold(keys ConditionKeys) bool {
+//
+// A value carrying a policy variable this door cannot resolve takes failClosed,
+// so a Deny survives one rather than disappearing.
+func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 	for op, byKey := range s.Condition {
 		for key, values := range byKey {
 			actual, present := keys[key]
-			if !present || !conditionHolds(op, actual, values, keys) {
+			if !present || !conditionHolds(op, actual, values, keys, failClosed) {
 				return false
 			}
 		}
@@ -68,13 +71,20 @@ func (s *Statement) conditionsHold(keys ConditionKeys) bool {
 //
 // keys resolves policy variables in the string operators' values. Bool and
 // IpAddress values are compared as written, a variable in either having no
-// meaning.
-func conditionHolds(operator, actual string, values []string, keys ConditionKeys) bool {
+// meaning. A value carrying an unresolvable reference takes failClosed.
+func conditionHolds(operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
 	switch operator {
 	case OpStringEquals:
 		for _, v := range values {
-			resolved, result := expandVariables(v, keys, false)
-			if result != expansionUnresolvable && resolved == actual {
+			// Values are ORed, so an unresolvable one must not cut the scan short.
+			switch resolved, result := expandVariables(v, keys, false); {
+			case result == expansionUnresolvable:
+				slog.Debug("iampolicy: policy variable is unresolvable at this door",
+					"value", v, "matches", failClosed)
+				if failClosed {
+					return true
+				}
+			case resolved == actual:
 				return true
 			}
 		}
@@ -86,7 +96,7 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		}
 	case OpStringLike:
 		for _, v := range values {
-			if matchPattern(v, actual, keys) {
+			if matchPattern(v, actual, keys, failClosed) {
 				return true
 			}
 		}

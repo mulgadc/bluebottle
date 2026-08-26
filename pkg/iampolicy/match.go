@@ -1,6 +1,9 @@
 package iampolicy
 
-import "strings"
+import (
+	"log/slog"
+	"strings"
+)
 
 // MatchWildcard reports whether value matches pattern, where "*" matches zero or
 // more characters at any position (infix) and "?" matches exactly one character,
@@ -89,13 +92,16 @@ func matchesAny(patterns []string, value string, caseInsensitive bool) bool {
 
 // matchPattern reports whether pattern matches value, resolving policy
 // variables first. Patterns without references retain the IAM grammar, where
-// "\" is an ordinary literal; unresolvable references match nothing.
-func matchPattern(pattern, value string, keys ConditionKeys) bool {
+// "\" is an ordinary literal. A reference this door cannot resolve takes
+// failClosed, which the statement's Effect decides.
+func matchPattern(pattern, value string, keys ConditionKeys, failClosed bool) bool {
 	switch expanded, result := expandVariables(pattern, keys, true); result {
 	case expansionLiteral:
 		return MatchWildcard(pattern, value)
 	case expansionUnresolvable:
-		return false
+		slog.Debug("iampolicy: policy variable is unresolvable at this door",
+			"pattern", pattern, "matches", failClosed)
+		return failClosed
 	default:
 		return matchGlob(expanded, value, true)
 	}
@@ -103,9 +109,9 @@ func matchPattern(pattern, value string, keys ConditionKeys) bool {
 
 // matchesAnyResource reports whether any resource pattern matches, resolving
 // policy variables first. Matching is case-sensitive, per AWS.
-func matchesAnyResource(patterns []string, resource string, keys ConditionKeys) bool {
+func matchesAnyResource(patterns []string, resource string, keys ConditionKeys, failClosed bool) bool {
 	for _, p := range patterns {
-		if matchPattern(p, resource, keys) {
+		if matchPattern(p, resource, keys, failClosed) {
 			return true
 		}
 	}

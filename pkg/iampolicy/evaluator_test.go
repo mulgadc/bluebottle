@@ -300,7 +300,10 @@ func TestEvaluate_UnresolvableVariableDoesNotMatch(t *testing.T) {
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home//object", p, nil))
 }
 
-// The same rule on a Deny: it does not fire, so the Allow stands.
+// A Deny fails the other way: an unsuppliable key makes it match, so the
+// restriction survives a door that cannot resolve it. Doors omit aws:username
+// for assumed-role sessions, so the alternative is a Deny that is silently inert
+// for every role.
 func TestEvaluate_UnresolvableVariableOnDeny(t *testing.T) {
 	p := []iampolicy.PolicyDocument{
 		doc("Allow", "s3:*", "arn:aws:s3:::*"),
@@ -308,8 +311,41 @@ func TestEvaluate_UnresolvableVariableOnDeny(t *testing.T) {
 	}
 	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject",
 		"arn:aws:s3:::home/alice/object", p, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}))
-	assert.Equal(t, iampolicy.Allow,
+	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/object", p, nil))
+
+	// Failing closed is scoped by Action: it does not turn the Deny into a
+	// blanket one over services it never named.
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "arn:aws:s3:::home/alice/object",
+			[]iampolicy.PolicyDocument{
+				doc("Allow", "ec2:*", "arn:aws:s3:::*"),
+				doc("Deny", "s3:*", "arn:aws:s3:::home/${aws:username}/*"),
+			}, nil))
+
+	// A resolvable Deny is unaffected: it still only covers what it names.
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject",
+		"arn:aws:s3:::home/bob/object", p, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}))
+}
+
+// The same rule for a variable in a Deny's condition value: unresolvable means
+// the condition holds, so the Deny fires rather than evaporating.
+func TestEvaluate_UnresolvableVariableInDenyCondition(t *testing.T) {
+	deny := doc("Deny", "s3:*", "arn:aws:s3:::bucket/*")
+	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
+		"StringLike": {"s3:prefix": {"${aws:username}/*"}},
+	}
+	p := []iampolicy.PolicyDocument{doc("Allow", "s3:*", "arn:aws:s3:::*"), deny}
+	keys := iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "alice/x"}
+
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::bucket/x", p, keys))
+
+	// With the key suppliable it resolves normally, and a non-matching prefix
+	// leaves the Allow standing.
+	keys[iampolicy.KeyUsername] = "bob"
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::bucket/x", p, keys))
 }
 
 // A metacharacter in a principal attribute must not become a wildcard, or a
