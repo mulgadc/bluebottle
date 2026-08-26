@@ -276,3 +276,81 @@ func TestEvaluate_UnenforceableDenyStillScopedByAction(t *testing.T) {
 	assert.Equal(t, iampolicy.Allow,
 		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
 }
+
+// The per-user prefix idiom end to end: without substitution the Allow never
+// fires.
+func TestEvaluate_PerUserPrefixVariable(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")}
+	alice := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}
+
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/object", p, alice))
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/bob/object", p, alice))
+}
+
+// An unsuppliable key makes the statement non-matching rather than substituting
+// empty, which would select a different set of resources.
+func TestEvaluate_UnresolvableVariableDoesNotMatch(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")}
+
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/object", p, nil))
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home//object", p, nil))
+}
+
+// The same rule on a Deny: it does not fire, so the Allow stands.
+func TestEvaluate_UnresolvableVariableOnDeny(t *testing.T) {
+	p := []iampolicy.PolicyDocument{
+		doc("Allow", "s3:*", "arn:aws:s3:::*"),
+		doc("Deny", "s3:*", "arn:aws:s3:::home/${aws:username}/*"),
+	}
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject",
+		"arn:aws:s3:::home/alice/object", p, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}))
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/object", p, nil))
+}
+
+// A metacharacter in a principal attribute must not become a wildcard, or a
+// user named "*" would reach every other user's prefix.
+func TestEvaluate_SubstitutedWildcardDoesNotEscalate(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")}
+	star := iampolicy.ConditionKeys{iampolicy.KeyUsername: "*"}
+
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/object", p, star))
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/*/object", p, star))
+
+	q := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")}
+	single := iampolicy.ConditionKeys{iampolicy.KeyUsername: "?"}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/a/object", q, single))
+}
+
+// Single pass: an attribute that looks like a reference stays literal text.
+func TestEvaluate_SubstitutedValueIsNotReexpanded(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")}
+	keys := iampolicy.ConditionKeys{
+		iampolicy.KeyUsername: "${aws:userid}", iampolicy.KeyUserID: "AIDAALICE",
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/AIDAALICE/object", p, keys))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject",
+		"arn:aws:s3:::home/${aws:userid}/object", p, keys))
+}
+
+// The account and user-ID variables resolve from the same context.
+func TestEvaluate_AccountAndUserIDVariables(t *testing.T) {
+	keys := iampolicy.ConditionKeys{
+		iampolicy.KeyPrincipalAccount: "000000000001", iampolicy.KeyUserID: "AIDAALICE",
+	}
+	account := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::${aws:PrincipalAccount}/*")}
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::000000000001/k", account, keys))
+
+	userID := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::u/${aws:userid}/*")}
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::u/AIDAALICE/k", userID, keys))
+}

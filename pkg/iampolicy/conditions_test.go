@@ -213,6 +213,59 @@ func TestEvaluateWithKeys_ConditionalDenyRespectsKeys(t *testing.T) {
 		policies, iampolicy.ConditionKeys{iampolicy.KeySecureTransport: "false"}))
 }
 
+// A condition value may carry a variable, resolved against the same context
+// the key itself is read from.
+func TestEvaluateWithKeys_ConditionValueResolvesVariables(t *testing.T) {
+	d := condDoc(iampolicy.OpStringLike, iampolicy.KeyS3Prefix, "home/${aws:username}/*")
+
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+			iampolicy.KeyS3Prefix: "home/alice/reports", iampolicy.KeyUsername: "alice",
+		}))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+			iampolicy.KeyS3Prefix: "home/bob/reports", iampolicy.KeyUsername: "alice",
+		}))
+
+	// Unresolvable: the door supplies s3:prefix but not aws:username.
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/reports"}))
+
+	// A username holding a wildcard is compared literally.
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+			iampolicy.KeyS3Prefix: "home/bob/reports", iampolicy.KeyUsername: "*",
+		}))
+}
+
+// StringEquals compares the resolved value exactly, with no wildcard meaning.
+func TestEvaluateWithKeys_StringEqualsResolvesVariables(t *testing.T) {
+	d := condDoc(iampolicy.OpStringEquals, iampolicy.KeyS3Prefix, "home/${aws:username}")
+
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+			iampolicy.KeyS3Prefix: "home/alice", iampolicy.KeyUsername: "alice",
+		}))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+			iampolicy.KeyS3Prefix: "home/alice/x", iampolicy.KeyUsername: "alice",
+		}))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice"}))
+}
+
+// A reference the evaluator does not support makes a condition non-matching,
+// even when the request value contains the placeholder text literally.
+func TestEvaluateWithKeys_UnsupportedReferenceDoesNotMatch(t *testing.T) {
+	for _, op := range []string{iampolicy.OpStringEquals, iampolicy.OpStringLike} {
+		d := condDoc(op, iampolicy.KeyS3Prefix, "reports/${quarter}")
+		assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+			[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
+				iampolicy.KeyS3Prefix: "reports/${quarter}", iampolicy.KeyUsername: "alice",
+			}), op)
+	}
+}
+
 // Spot-check that common AWS operators outside the allowlist stay unsupported.
 // The table-vs-matcher agreement itself is pinned in conditions_internal_test.go,
 // which iterates the allowlist rather than a hardcoded copy.

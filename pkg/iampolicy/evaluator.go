@@ -29,6 +29,10 @@ const (
 // keys carries the request's condition context keys. A condition on a key the
 // caller cannot supply evaluates false, per AWS, so the same policy legitimately
 // gives different answers at different doors. Passing nil fails every condition.
+//
+// Resource patterns and string condition values may carry ${key} policy
+// variables, resolved from keys. An unresolvable one makes the statement
+// non-matching, for Allow and Deny alike.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
 	hasAllow := false
 	for i := range policies {
@@ -74,11 +78,11 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
 		// switch still fires. NotAction/NotResource leave the corresponding
 		// positive selector empty, so that half is treated as matching.
 		return (len(s.NotAction) > 0 || matchesAny(s.Action, action, true)) &&
-			(len(s.NotResource) > 0 || matchesAny(s.Resource, resource, false))
+			(len(s.NotResource) > 0 || matchesAnyResource(s.Resource, resource, keys))
 	}
 
 	return matchesAny(s.Action, action, true) &&
-		matchesAny(s.Resource, resource, false) &&
+		matchesAnyResource(s.Resource, resource, keys) &&
 		s.conditionsHold(keys)
 }
 
