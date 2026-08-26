@@ -3,7 +3,6 @@ package iampolicy
 import (
 	"log/slog"
 	"net/netip"
-	"slices"
 	"strings"
 )
 
@@ -15,6 +14,7 @@ const (
 	KeySecureTransport  = "aws:SecureTransport"
 	KeyUsername         = "aws:username"
 	KeyPrincipalAccount = "aws:PrincipalAccount"
+	KeyUserID           = "aws:userid"
 )
 
 // Condition operators understood by the evaluator.
@@ -27,7 +27,8 @@ const (
 
 // aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
 // the stack, so the key could never be true and accepting it would mint a grant
-// that silently never fires.
+// that silently never fires. KeyUserID is absent for the same reason: it is a
+// policy variable only, with no operator over it implemented.
 var supportedConditions = map[string]map[string]bool{
 	KeySourceIP:         {OpIPAddress: true},
 	KeyS3Prefix:         {OpStringEquals: true, OpStringLike: true},
@@ -54,7 +55,7 @@ func (s *Statement) conditionsHold(keys ConditionKeys) bool {
 	for op, byKey := range s.Condition {
 		for key, values := range byKey {
 			actual, present := keys[key]
-			if !present || !conditionHolds(op, actual, values) {
+			if !present || !conditionHolds(op, actual, values, keys) {
 				return false
 			}
 		}
@@ -64,10 +65,18 @@ func (s *Statement) conditionsHold(keys ConditionKeys) bool {
 
 // conditionHolds applies one operator to the request's value for a key. An
 // unrecognized operator returns false; callers reject those before reaching here.
-func conditionHolds(operator, actual string, values []string) bool {
+//
+// keys resolves policy variables in the string operators' values. Bool and
+// IpAddress values are compared as written, a variable in either having no
+// meaning.
+func conditionHolds(operator, actual string, values []string, keys ConditionKeys) bool {
 	switch operator {
 	case OpStringEquals:
-		return slices.Contains(values, actual)
+		for _, v := range values {
+			if resolved, ok := expandVariables(v, keys, false); ok && resolved == actual {
+				return true
+			}
+		}
 	case OpBool:
 		for _, v := range values {
 			if strings.EqualFold(v, actual) {
@@ -76,7 +85,13 @@ func conditionHolds(operator, actual string, values []string) bool {
 		}
 	case OpStringLike:
 		for _, v := range values {
-			if MatchWildcard(v, actual) {
+			if !strings.Contains(v, variablePrefix) {
+				if MatchWildcard(v, actual) {
+					return true
+				}
+				continue
+			}
+			if resolved, ok := expandVariables(v, keys, true); ok && matchGlob(resolved, actual, true) {
 				return true
 			}
 		}

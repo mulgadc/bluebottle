@@ -9,8 +9,7 @@ import "strings"
 // case-insensitivity lower-case both inputs first.
 //
 // Metacharacters are matched over bytes, not runes: IAM ARNs and action names
-// are ASCII, and IAM has no escape syntax, so a literal "?" cannot be expressed
-// in a pattern.
+// are ASCII, and IAM has no escape syntax, so a "\" here is an ordinary literal.
 func MatchWildcard(pattern, value string) bool {
 	if pattern == "*" {
 		return true
@@ -18,18 +17,25 @@ func MatchWildcard(pattern, value string) bool {
 	if !strings.ContainsAny(pattern, "*?") {
 		return pattern == value
 	}
+	return matchGlob(pattern, value, false)
+}
 
+// matchGlob is the shared scan behind MatchWildcard. When escapes is true a
+// "\x" element matches a literal x, which is how an expanded policy variable
+// keeps a "*" in a principal attribute from acting as a wildcard.
+func matchGlob(pattern, value string, escapes bool) bool {
 	// Greedy scan with a single backtrack point at the most recent "*", which
 	// keeps patterns like a*a*a*b linear rather than exponential.
 	var p, v int
 	star, starV := -1, 0
 	for v < len(value) {
+		b, meta, width := token(pattern, p, escapes)
 		switch {
-		case p < len(pattern) && pattern[p] == '*':
+		case meta && b == '*':
 			star, starV = p, v
-			p++
-		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == value[v]):
-			p++
+			p += width
+		case width > 0 && (meta || b == value[v]):
+			p += width
 			v++
 		case star >= 0:
 			starV++
@@ -39,10 +45,28 @@ func MatchWildcard(pattern, value string) bool {
 		}
 	}
 
-	for p < len(pattern) && pattern[p] == '*' {
-		p++
+	for {
+		b, meta, width := token(pattern, p, escapes)
+		if !meta || b != '*' {
+			break
+		}
+		p += width
 	}
 	return p == len(pattern)
+}
+
+// token decodes the pattern element at p: its byte, whether it is a
+// metacharacter, and its width. Width zero means the pattern is exhausted, and a
+// trailing "\" is an ordinary literal.
+func token(pattern string, p int, escapes bool) (b byte, meta bool, width int) {
+	if p >= len(pattern) {
+		return 0, false, 0
+	}
+	if escapes && pattern[p] == '\\' && p+1 < len(pattern) {
+		return pattern[p+1], false, 2
+	}
+	c := pattern[p]
+	return c, c == '*' || c == '?', 1
 }
 
 // matchesAny reports whether any pattern matches value. When caseInsensitive is
@@ -57,6 +81,25 @@ func matchesAny(patterns []string, value string, caseInsensitive bool) bool {
 			p = strings.ToLower(p)
 		}
 		if MatchWildcard(p, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAnyResource reports whether any resource pattern matches, resolving
+// policy variables first. Matching is case-sensitive, per AWS. A pattern whose
+// references cannot be resolved matches nothing rather than collapsing.
+func matchesAnyResource(patterns []string, resource string, keys ConditionKeys) bool {
+	for _, p := range patterns {
+		if !strings.Contains(p, variablePrefix) {
+			if MatchWildcard(p, resource) {
+				return true
+			}
+			continue
+		}
+		expanded, ok := expandVariables(p, keys, true)
+		if ok && matchGlob(expanded, resource, true) {
 			return true
 		}
 	}
