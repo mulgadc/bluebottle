@@ -146,6 +146,10 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 			[]string{"home/alice/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/docs/"}, iampolicy.Allow},
 		{"StringLike wildcard mismatch", iampolicy.OpStringLike, iampolicy.KeyS3Prefix,
 			[]string{"home/alice/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/bob/"}, iampolicy.Deny},
+		{"StringLike single-character match", iampolicy.OpStringLike, iampolicy.KeyS3Prefix,
+			[]string{"home/alice?/"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice1/"}, iampolicy.Allow},
+		{"StringLike single-character mismatch", iampolicy.OpStringLike, iampolicy.KeyS3Prefix,
+			[]string{"home/alice?/"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/"}, iampolicy.Deny},
 		{"StringEquals prefix exact", iampolicy.OpStringEquals, iampolicy.KeyS3Prefix,
 			[]string{"logs/"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "logs/"}, iampolicy.Allow},
 

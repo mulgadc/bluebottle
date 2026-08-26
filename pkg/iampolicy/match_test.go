@@ -51,6 +51,37 @@ func TestMatchWildcard(t *testing.T) {
 		{"arn:aws:s3:::MyBucket", "arn:aws:s3:::MyBucket", true},
 		{"arn:aws:s3:::MyBucket", "arn:aws:s3:::mybucket", false},
 
+		// Single-character wildcard.
+		{"a?c", "abc", true},
+		{"a?c", "ac", false},
+		{"a?c", "abbc", false},
+
+		// "?" never matches the empty string.
+		{"abc?", "abc", false},
+		{"?", "", false},
+		{"?", "a", true},
+
+		// "?" at pattern start and end.
+		{"?bc", "abc", true},
+		{"?bc", "bc", false},
+		{"ab?", "abc", true},
+
+		// "?" combined with "*".
+		{"a?*c", "abxc", true},
+		{"a?*c", "ac", false},
+		{"arn:aws:s3:::secret?/*", "arn:aws:s3:::secrets/object", true},
+		{"arn:aws:s3:::secret?/*", "arn:aws:s3:::secret/object", false},
+
+		// A literal "?" in the value: the metacharacter matches it, a literal
+		// pattern byte does not.
+		{"a?c", "a?c", true},
+		{"abc", "a?c", false},
+
+		// Backtracking.
+		{"a*b?c", "axxbyc", true},
+		{"*?", "a", true},
+		{"a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},
+
 		// Edge cases.
 		{"", "", true},
 		{"", "something", false},
