@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	redactedValue  = "<redacted>"
+	amzSessionName = "x-amz-security-token"
+)
+
 // Verify checks the request signature under secretAccessKey and confirms the credential
 // scope's region and service match region and service, returning a VerifiedRequest when
 // the request is authentic. region is the region the caller requires the client to have
@@ -49,6 +54,19 @@ func (req *SignedRequest) buildCanonicalHash() string {
 // request. A signature mismatch means this string differs from the one the client signed, so
 // diffing the two is the only way to localise the disagreement; nothing else needs it.
 func (req *SignedRequest) CanonicalRequest() string {
+	return req.canonicalRequest(false)
+}
+
+// RedactedCanonicalRequest renders the canonical request with the session token masked in
+// both its header and its presigned query form, for logging a signature mismatch. Everything
+// else is retained: signed header values and a payload hash, never the secret key.
+func (req *SignedRequest) RedactedCanonicalRequest() string {
+	return req.canonicalRequest(true)
+}
+
+// canonicalRequest builds the canonical request, masking the session token when redact is set.
+// Redaction happens after ordering, so a redacted rendering still lines up with the real one.
+func (req *SignedRequest) canonicalRequest(redact bool) string {
 	// One (key, value) pair per value; the raw forms drive ordering.
 	type queryParam struct{ key, value string }
 	params := make([]queryParam, 0, len(req.Canonical.Query))
@@ -74,7 +92,12 @@ func (req *SignedRequest) CanonicalRequest() string {
 	// Encode once, now that ordering is settled.
 	pairs := make([]string, len(params))
 	for i, p := range params {
-		pairs[i] = uriEncode(p.key) + "=" + uriEncode(p.value)
+		value := uriEncode(p.value)
+		if redact && strings.EqualFold(p.key, amzSessionName) {
+			value = redactedValue
+		}
+
+		pairs[i] = uriEncode(p.key) + "=" + value
 	}
 
 	// SigV4 signs the headers in sorted order, for both the header block and the list below.
@@ -88,9 +111,14 @@ func (req *SignedRequest) CanonicalRequest() string {
 	// Canonical headers: "name:value\n" per signed header.
 	var headers strings.Builder
 	for _, name := range signedHeaders {
+		value := req.Canonical.Headers[name]
+		if redact && strings.EqualFold(name, amzSessionName) {
+			value = redactedValue
+		}
+
 		headers.WriteString(name)
 		headers.WriteByte(':')
-		headers.WriteString(req.Canonical.Headers[name])
+		headers.WriteString(value)
 		headers.WriteByte('\n')
 	}
 
