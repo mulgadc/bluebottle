@@ -16,40 +16,43 @@ var aliceKeys = ConditionKeys{
 // Resolution without escaping, the form the exact-comparison operators use.
 func TestExpandVariables(t *testing.T) {
 	tests := []struct {
-		name  string
-		in    string
-		keys  ConditionKeys
-		want  string
-		wantK bool
+		name   string
+		in     string
+		keys   ConditionKeys
+		want   string
+		result expansion
 	}{
-		{"no reference", "arn:aws:s3:::home/*", aliceKeys, "arn:aws:s3:::home/*", true},
-		{"username", "arn:aws:s3:::home/${aws:username}/*", aliceKeys, "arn:aws:s3:::home/alice/*", true},
-		{"account", "${aws:PrincipalAccount}", aliceKeys, "000000000001", true},
-		{"userid", "${aws:userid}", aliceKeys, "AIDAALICE", true},
-		{"two references", "${aws:username}-${aws:userid}", aliceKeys, "alice-AIDAALICE", true},
+		{"no reference", "arn:aws:s3:::home/*", aliceKeys, "arn:aws:s3:::home/*", expansionLiteral},
+		{"username", "arn:aws:s3:::home/${aws:username}/*", aliceKeys, "arn:aws:s3:::home/alice/*", expansionResolved},
+		{"account", "${aws:PrincipalAccount}", aliceKeys, "000000000001", expansionResolved},
+		{"userid", "${aws:userid}", aliceKeys, "AIDAALICE", expansionResolved},
+		{"two references", "${aws:username}-${aws:userid}", aliceKeys, "alice-AIDAALICE", expansionResolved},
 
 		// A door that cannot supply the key makes the pattern unresolvable.
-		{"absent key", "home/${aws:username}/*", ConditionKeys{}, "", false},
-		{"nil keys", "home/${aws:username}/*", nil, "", false},
-		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "", false},
-		{"unknown key", "home/${nonsense}/*", aliceKeys, "", false},
-		{"unterminated", "home/${aws:username", aliceKeys, "", false},
+		{"absent key", "home/${aws:username}/*", ConditionKeys{}, "", expansionUnresolvable},
+		{"nil keys", "home/${aws:username}/*", nil, "", expansionUnresolvable},
+
+		// A reference the evaluator does not own is ordinary text: "${" is a
+		// legal ARN byte sequence and predates this syntax.
+		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "home/${aws:SourceIp}/*", expansionLiteral},
+		{"unknown key", "home/${nonsense}/*", aliceKeys, "home/${nonsense}/*", expansionLiteral},
+		{"unterminated", "home/${aws:username", aliceKeys, "home/${aws:username", expansionLiteral},
 
 		// Present but empty is a real value, kept distinct from absent.
-		{"empty value", "home/${aws:username}/*", ConditionKeys{KeyUsername: ""}, "home//*", true},
+		{"empty value", "home/${aws:username}/*", ConditionKeys{KeyUsername: ""}, "home//*", expansionResolved},
 
 		// AWS's literal escapes.
-		{"literal star", "home/${*}/*", aliceKeys, "home/*/*", true},
-		{"literal question", "home/${?}", aliceKeys, "home/?", true},
-		{"literal dollar", "${$}{aws:username}", aliceKeys, "${aws:username}", true},
+		{"literal star", "home/${*}/*", aliceKeys, "home/*/*", expansionResolved},
+		{"literal question", "home/${?}", aliceKeys, "home/?", expansionResolved},
+		{"literal dollar", "${$}{aws:username}", aliceKeys, "${aws:username}", expansionResolved},
 
 		// Single pass: a substituted value carrying "${" is not re-expanded.
-		{"value holds a reference", "${aws:username}", ConditionKeys{KeyUsername: "${aws:userid}"}, "${aws:userid}", true},
+		{"value holds a reference", "${aws:username}", ConditionKeys{KeyUsername: "${aws:userid}"}, "${aws:userid}", expansionResolved},
 	}
 
 	for _, tt := range tests {
-		got, ok := expandVariables(tt.in, tt.keys, false)
-		assert.Equal(t, tt.wantK, ok, "expandVariables(%q) resolved", tt.in)
+		got, result := expandVariables(tt.in, tt.keys, false)
+		assert.Equal(t, tt.result, result, "expandVariables(%q) result", tt.in)
 		assert.Equal(t, tt.want, got, "expandVariables(%q)", tt.in)
 	}
 }
@@ -57,29 +60,35 @@ func TestExpandVariables(t *testing.T) {
 // escapeMeta escapes metacharacters in a substituted value, so a principal
 // attribute cannot widen the pattern it lands in.
 func TestExpandVariables_EscapesSubstitutedMetacharacters(t *testing.T) {
-	got, ok := expandVariables("home/${aws:username}/*", ConditionKeys{KeyUsername: "*"}, true)
-	assert.True(t, ok)
+	got, result := expandVariables("home/${aws:username}/*", ConditionKeys{KeyUsername: "*"}, true)
+	assert.Equal(t, expansionResolved, result)
 	assert.Equal(t, `home/\*/*`, got)
 
-	got, ok = expandVariables("home/${aws:username}/*", ConditionKeys{KeyUsername: "a?b"}, true)
-	assert.True(t, ok)
+	got, result = expandVariables("home/${aws:username}/*", ConditionKeys{KeyUsername: "a?b"}, true)
+	assert.Equal(t, expansionResolved, result)
 	assert.Equal(t, `home/a\?b/*`, got)
 
 	// A backslash is escaped on both sides, so the escape character is never
 	// mistaken for one the expander introduced.
-	got, ok = expandVariables(`a\b/${aws:username}`, ConditionKeys{KeyUsername: `c\d`}, true)
-	assert.True(t, ok)
+	got, result = expandVariables(`a\b/${aws:username}`, ConditionKeys{KeyUsername: `c\d`}, true)
+	assert.Equal(t, expansionResolved, result)
 	assert.Equal(t, `a\\b/c\\d`, got)
 
 	// The pattern's own metacharacters keep their meaning.
-	got, ok = expandVariables("home/${aws:username}/?*", aliceKeys, true)
-	assert.True(t, ok)
+	got, result = expandVariables("home/${aws:username}/?*", aliceKeys, true)
+	assert.Equal(t, expansionResolved, result)
 	assert.Equal(t, "home/alice/?*", got)
 
 	// ${*} is the literal form, so it is escaped like a substituted value.
-	got, ok = expandVariables("home/${*}", aliceKeys, true)
-	assert.True(t, ok)
+	got, result = expandVariables("home/${*}", aliceKeys, true)
+	assert.Equal(t, expansionResolved, result)
 	assert.Equal(t, `home/\*`, got)
+
+	// A literal result is not escaped, so its caller must compare it as
+	// written rather than glob-match it with escapes enabled.
+	got, result = expandVariables(`a\b`, aliceKeys, true)
+	assert.Equal(t, expansionLiteral, result)
+	assert.Equal(t, `a\b`, got)
 }
 
 // The write-path gate: anything unresolvable is reportable before storage.

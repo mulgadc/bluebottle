@@ -154,9 +154,23 @@ func TestMatchesAnyResource(t *testing.T) {
 	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/bob/object", star))
 	assert.True(t, matchesAnyResource(patterns, "arn:aws:s3:::home/*/object", star))
 
-	// Patterns without a reference behave exactly as before.
+	// Patterns without a reference behave exactly as before, including a
+	// backslash, which the IAM grammar treats as an ordinary literal.
 	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::*"}, "arn:aws:s3:::any", nil))
 	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b"}, "arn:aws:s3:::B", nil))
+	assert.True(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, `arn:aws:s3:::b/a\bx`, nil))
+	assert.False(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, "arn:aws:s3:::b/abx", nil))
+
+	// "${" is a legal ARN byte sequence. A reference the evaluator does not
+	// own stays literal rather than silently matching nothing.
+	env := []string{"arn:aws:s3:::b/${env}/*"}
+	assert.True(t, matchesAnyResource(env, "arn:aws:s3:::b/${env}/config", aliceKeys))
+	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/prod/config", aliceKeys))
+	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::b/${env", nil))
+
+	// One unresolvable pattern does not veto the rest of the list.
+	mixed := []string{"arn:aws:s3:::home/${aws:username}/*", "arn:aws:s3:::public/*"}
+	assert.True(t, matchesAnyResource(mixed, "arn:aws:s3:::public/x", nil))
 
 	// Case-sensitive, like the resource half of matchesAny.
 	assert.False(t, matchesAnyResource(patterns, "arn:aws:s3:::home/ALICE/object", aliceKeys))

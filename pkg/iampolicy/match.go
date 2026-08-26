@@ -1,6 +1,9 @@
 package iampolicy
 
-import "strings"
+import (
+	"log/slog"
+	"strings"
+)
 
 // MatchWildcard reports whether value matches pattern, where "*" matches zero or
 // more characters at any position (infix) and "?" matches exactly one character,
@@ -87,19 +90,27 @@ func matchesAny(patterns []string, value string, caseInsensitive bool) bool {
 	return false
 }
 
+// matchPattern reports whether pattern matches value, resolving policy
+// variables first. Only the resolved form is glob-matched with escapes: an
+// unresolved pattern keeps the IAM grammar, where "\" is an ordinary literal.
+func matchPattern(pattern, value string, keys ConditionKeys) bool {
+	switch expanded, result := expandVariables(pattern, keys, true); result {
+	case expansionLiteral:
+		return MatchWildcard(pattern, value)
+	case expansionUnresolvable:
+		slog.Warn("iampolicy: pattern carries a variable this request cannot resolve, matching nothing",
+			"pattern", pattern)
+		return false
+	default:
+		return matchGlob(expanded, value, true)
+	}
+}
+
 // matchesAnyResource reports whether any resource pattern matches, resolving
-// policy variables first. Matching is case-sensitive, per AWS. A pattern whose
-// references cannot be resolved matches nothing rather than collapsing.
+// policy variables first. Matching is case-sensitive, per AWS.
 func matchesAnyResource(patterns []string, resource string, keys ConditionKeys) bool {
 	for _, p := range patterns {
-		if !strings.Contains(p, variablePrefix) {
-			if MatchWildcard(p, resource) {
-				return true
-			}
-			continue
-		}
-		expanded, ok := expandVariables(p, keys, true)
-		if ok && matchGlob(expanded, resource, true) {
+		if matchPattern(p, resource, keys) {
 			return true
 		}
 	}

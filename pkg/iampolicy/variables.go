@@ -40,16 +40,43 @@ func UnsupportedVariable(s string) (key string, found bool) {
 	return "", false
 }
 
-// expandVariables resolves ${key} in s against the request context, reporting
-// false for a key that is not substitutable, absent, or unterminated. A
-// present-but-empty key substitutes empty.
+// expansion reports what expandVariables could make of a string.
+type expansion int
+
+const (
+	// expansionResolved: every reference resolved; use the returned string.
+	expansionResolved expansion = iota
+	// expansionLiteral: nothing here the evaluator owns, so the input means
+	// what it meant before variables existed. Compare it as written.
+	expansionLiteral
+	// expansionUnresolvable: a substitutable key this door cannot supply, so
+	// the pattern selects nothing rather than collapsing.
+	expansionUnresolvable
+)
+
+// Bytes expandVariables backslash-escapes when the caller will glob-match the
+// result: the metacharacters a substituted value must not introduce, and the
+// escape character itself wherever it appears.
+const (
+	escapesInText  = `\`
+	escapesInValue = `\*?`
+)
+
+// expandVariables resolves ${key} in s against the request context. A
+// present-but-empty key substitutes empty. A reference the evaluator does not
+// own is left alone: "${" is legal in an ARN and predates this syntax.
 //
 // Substituted text is never rescanned, so resolution is single pass. escapeMeta
-// escapes "*" and "?" in values and "\" throughout, so a value cannot act as a
+// escapes metacharacters in substituted values, so a value cannot act as a
 // wildcard when matchGlob reads the result back.
-func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, bool) {
+func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, expansion) {
 	if !strings.Contains(s, variablePrefix) {
-		return s, true
+		return s, expansionLiteral
+	}
+
+	textChars, valueChars := "", ""
+	if escapeMeta {
+		textChars, valueChars = escapesInText, escapesInValue
 	}
 
 	var b strings.Builder
@@ -57,15 +84,15 @@ func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, boo
 	for i := 0; i < len(s); {
 		open := strings.Index(s[i:], variablePrefix)
 		if open < 0 {
-			writeEscaped(&b, s[i:], escapeMeta, `\`)
+			writeEscaped(&b, s[i:], textChars)
 			break
 		}
-		writeEscaped(&b, s[i:i+open], escapeMeta, `\`)
+		writeEscaped(&b, s[i:i+open], textChars)
 		i += open + len(variablePrefix)
 
 		end := strings.IndexByte(s[i:], '}')
 		if end < 0 {
-			return "", false
+			return s, expansionLiteral
 		}
 		name := s[i : i+end]
 		i += end + 1
@@ -73,21 +100,21 @@ func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, boo
 		value, ok := literalVariables[name]
 		if !ok {
 			if !substitutableKeys[name] {
-				return "", false
+				return s, expansionLiteral
 			}
 			if value, ok = keys[name]; !ok {
-				return "", false
+				return "", expansionUnresolvable
 			}
 		}
-		writeEscaped(&b, value, escapeMeta, `\*?`)
+		writeEscaped(&b, value, valueChars)
 	}
-	return b.String(), true
+	return b.String(), expansionResolved
 }
 
-// writeEscaped copies s, prefixing every byte in chars with a backslash. With
-// escape false it copies s verbatim, for callers comparing it literally.
-func writeEscaped(b *strings.Builder, s string, escape bool, chars string) {
-	if !escape {
+// writeEscaped copies s, prefixing every byte in chars with a backslash. An
+// empty chars copies s verbatim, for callers comparing it literally.
+func writeEscaped(b *strings.Builder, s, chars string) {
+	if !strings.ContainsAny(s, chars) {
 		b.WriteString(s)
 		return
 	}

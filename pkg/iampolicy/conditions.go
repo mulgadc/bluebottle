@@ -73,7 +73,8 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 	switch operator {
 	case OpStringEquals:
 		for _, v := range values {
-			if resolved, ok := expandVariables(v, keys, false); ok && resolved == actual {
+			resolved, result := expandVariables(v, keys, false)
+			if result != expansionUnresolvable && resolved == actual {
 				return true
 			}
 		}
@@ -85,13 +86,7 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		}
 	case OpStringLike:
 		for _, v := range values {
-			if !strings.Contains(v, variablePrefix) {
-				if MatchWildcard(v, actual) {
-					return true
-				}
-				continue
-			}
-			if resolved, ok := expandVariables(v, keys, true); ok && matchGlob(resolved, actual, true) {
+			if matchPattern(v, actual, keys) {
 				return true
 			}
 		}
