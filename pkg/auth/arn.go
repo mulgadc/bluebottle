@@ -37,14 +37,44 @@ func ParseRoleARN(arn string) (accountID, name string, err error) {
 	return parts[4], name, nil
 }
 
-// ExtractPolicyName returns the trailing name segment of an IAM policy ARN,
-// e.g. arn:aws:iam::000000000001:policy/AdministratorAccess -> AdministratorAccess.
-// Returns "" for an ARN with no ":policy" segment.
-func ExtractPolicyName(arn string) string {
-	parts := strings.SplitN(arn, ":policy", 2)
-	if len(parts) != 2 || parts[1] == "" {
-		return ""
+// AWSManagedPolicyARNPrefix is the prefix of an AWS-managed policy ARN, whose
+// account segment is the literal "aws" rather than a numeric account ID.
+const AWSManagedPolicyARNPrefix = "arn:aws:iam::aws:policy/"
+
+// ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
+// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). The
+// name is the segment after the final "/". A malformed ARN — wrong prefix,
+// non-policy resource, empty name, or empty account — returns an error; callers
+// that must fail closed treat any error as an implicit deny. An AWS-managed ARN
+// parses with accountID "aws"; use IsAWSManagedPolicyARN to distinguish it.
+func ParsePolicyARN(arn string) (accountID, name string, err error) {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "iam" || parts[3] != "" {
+		return "", "", errors.New("not an IAM ARN")
 	}
-	segments := strings.Split(parts[1], "/")
-	return segments[len(segments)-1]
+	const prefix = "policy/"
+	resource := parts[5]
+	if !strings.HasPrefix(resource, prefix) {
+		return "", "", errors.New("ARN resource is not a policy")
+	}
+	pathAndName := resource[len(prefix):]
+	if slash := strings.LastIndex(pathAndName, "/"); slash >= 0 {
+		name = pathAndName[slash+1:]
+	} else {
+		name = pathAndName
+	}
+	if name == "" {
+		return "", "", errors.New("policy name is empty")
+	}
+	if parts[4] == "" {
+		return "", "", errors.New("account ID is empty")
+	}
+	return parts[4], name, nil
+}
+
+// IsAWSManagedPolicyARN reports whether arn names an AWS-managed policy, which
+// has no backing document in this stack and is resolved from a builtin registry
+// (or to no grant at all) rather than from an account's policy store.
+func IsAWSManagedPolicyARN(arn string) bool {
+	return strings.HasPrefix(arn, AWSManagedPolicyARNPrefix)
 }
