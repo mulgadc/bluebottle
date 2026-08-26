@@ -3,43 +3,46 @@ package iampolicy
 import "strings"
 
 // MatchWildcard reports whether value matches pattern, where "*" matches zero or
-// more characters at any position (infix), as AWS IAM Action and Resource
-// patterns require (e.g. arn:aws:iam::*:role/app-*). Matching is case-sensitive;
-// callers that need case-insensitivity lower-case both inputs first.
+// more characters at any position (infix) and "?" matches exactly one character,
+// as the AWS IAM Action and Resource grammar requires (e.g.
+// arn:aws:iam::*:role/app-*). Matching is case-sensitive; callers that need
+// case-insensitivity lower-case both inputs first.
+//
+// Metacharacters are matched over bytes, not runes: IAM ARNs and action names
+// are ASCII, and IAM has no escape syntax, so a literal "?" cannot be expressed
+// in a pattern.
 func MatchWildcard(pattern, value string) bool {
 	if pattern == "*" {
 		return true
 	}
-	if !strings.Contains(pattern, "*") {
+	if !strings.ContainsAny(pattern, "*?") {
 		return pattern == value
 	}
 
-	parts := strings.Split(pattern, "*")
-	last := len(parts) - 1
-
-	if !strings.HasPrefix(value, parts[0]) {
-		return false
-	}
-	if !strings.HasSuffix(value, parts[last]) {
-		return false
-	}
-
-	// Trim the anchored ends before scanning the middle parts.
-	remaining := value[len(parts[0]):]
-	if len(remaining) < len(parts[last]) {
-		return false
-	}
-	remaining = remaining[:len(remaining)-len(parts[last])]
-
-	// Walk through the middle parts in order.
-	for i := 1; i < last; i++ {
-		idx := strings.Index(remaining, parts[i])
-		if idx < 0 {
+	// Greedy scan with a single backtrack point at the most recent "*", which
+	// keeps patterns like a*a*a*b linear rather than exponential.
+	var p, v int
+	star, starV := -1, 0
+	for v < len(value) {
+		switch {
+		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == value[v]):
+			p++
+			v++
+		case p < len(pattern) && pattern[p] == '*':
+			star, starV = p, v
+			p++
+		case star >= 0:
+			starV++
+			p, v = star+1, starV
+		default:
 			return false
 		}
-		remaining = remaining[idx+len(parts[i]):]
 	}
-	return true
+
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+	return p == len(pattern)
 }
 
 // matchesAny reports whether any pattern matches value. When caseInsensitive is

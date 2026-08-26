@@ -50,6 +50,19 @@ func TestEvaluate_ExplicitDenyWinsSamePolicy(t *testing.T) {
 	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("ec2:TerminateInstances", "*", p, nil))
 }
 
+// A Deny whose Resource uses the single-character wildcard must fire. Treating
+// "?" as a literal made the Deny miss and the broad Allow win.
+func TestEvaluate_DenySingleCharacterWildcard(t *testing.T) {
+	p := []iampolicy.PolicyDocument{
+		doc("Allow", "s3:*", "arn:aws:s3:::*"),
+		doc("Deny", "s3:*", "arn:aws:s3:::secret?/*"),
+	}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::secrets/object", p, nil))
+	assert.Equal(t, iampolicy.Allow,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::secret/object", p, nil))
+}
+
 func TestEvaluate_NoMatchingAction(t *testing.T) {
 	p := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "*")}
 	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("ec2:RunInstances", "*", p, nil))
