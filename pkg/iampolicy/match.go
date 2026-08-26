@@ -1,9 +1,6 @@
 package iampolicy
 
-import (
-	"log/slog"
-	"strings"
-)
+import "strings"
 
 // MatchWildcard reports whether value matches pattern, where "*" matches zero or
 // more characters at any position (infix) and "?" matches exactly one character,
@@ -91,15 +88,13 @@ func matchesAny(patterns []string, value string, caseInsensitive bool) bool {
 }
 
 // matchPattern reports whether pattern matches value, resolving policy
-// variables first. Only the resolved form is glob-matched with escapes: an
-// unresolved pattern keeps the IAM grammar, where "\" is an ordinary literal.
+// variables first. Patterns without references retain the IAM grammar, where
+// "\" is an ordinary literal; unresolvable references match nothing.
 func matchPattern(pattern, value string, keys ConditionKeys) bool {
 	switch expanded, result := expandVariables(pattern, keys, true); result {
 	case expansionLiteral:
 		return MatchWildcard(pattern, value)
 	case expansionUnresolvable:
-		slog.Warn("iampolicy: pattern carries a variable this request cannot resolve, matching nothing",
-			"pattern", pattern)
 		return false
 	default:
 		return matchGlob(expanded, value, true)

@@ -32,11 +32,10 @@ func TestExpandVariables(t *testing.T) {
 		{"absent key", "home/${aws:username}/*", ConditionKeys{}, "", expansionUnresolvable},
 		{"nil keys", "home/${aws:username}/*", nil, "", expansionUnresolvable},
 
-		// A reference the evaluator does not own is ordinary text: "${" is a
-		// legal ARN byte sequence and predates this syntax.
-		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "home/${aws:SourceIp}/*", expansionLiteral},
-		{"unknown key", "home/${nonsense}/*", aliceKeys, "home/${nonsense}/*", expansionLiteral},
-		{"unterminated", "home/${aws:username", aliceKeys, "home/${aws:username", expansionLiteral},
+		// Unsupported and malformed references make the pattern unresolvable.
+		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "", expansionUnresolvable},
+		{"unknown key", "home/${nonsense}/*", aliceKeys, "", expansionUnresolvable},
+		{"unterminated", "home/${aws:username", aliceKeys, "", expansionUnresolvable},
 
 		// Present but empty is a real value, kept distinct from absent.
 		{"empty value", "home/${aws:username}/*", ConditionKeys{KeyUsername: ""}, "home//*", expansionResolved},

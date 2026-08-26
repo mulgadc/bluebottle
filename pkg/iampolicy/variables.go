@@ -46,11 +46,11 @@ type expansion int
 const (
 	// expansionResolved: every reference resolved; use the returned string.
 	expansionResolved expansion = iota
-	// expansionLiteral: nothing here the evaluator owns, so the input means
-	// what it meant before variables existed. Compare it as written.
+	// expansionLiteral: the input has no variable references. Compare it as
+	// written, using the ordinary IAM pattern grammar.
 	expansionLiteral
-	// expansionUnresolvable: a substitutable key this door cannot supply, so
-	// the pattern selects nothing rather than collapsing.
+	// expansionUnresolvable: a reference is unsupported, malformed, or absent
+	// from this door's context, so the pattern selects nothing.
 	expansionUnresolvable
 )
 
@@ -63,8 +63,8 @@ const (
 )
 
 // expandVariables resolves ${key} in s against the request context. A
-// present-but-empty key substitutes empty. A reference the evaluator does not
-// own is left alone: "${" is legal in an ARN and predates this syntax.
+// present-but-empty key substitutes empty. An unsupported, absent, or
+// unterminated reference is unresolvable and makes its pattern select nothing.
 //
 // Substituted text is never rescanned, so resolution is single pass. escapeMeta
 // escapes metacharacters in substituted values, so a value cannot act as a
@@ -92,7 +92,7 @@ func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, exp
 
 		end := strings.IndexByte(s[i:], '}')
 		if end < 0 {
-			return s, expansionLiteral
+			return "", expansionUnresolvable
 		}
 		name := s[i : i+end]
 		i += end + 1
@@ -100,7 +100,7 @@ func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, exp
 		value, ok := literalVariables[name]
 		if !ok {
 			if !substitutableKeys[name] {
-				return s, expansionLiteral
+				return "", expansionUnresolvable
 			}
 			if value, ok = keys[name]; !ok {
 				return "", expansionUnresolvable

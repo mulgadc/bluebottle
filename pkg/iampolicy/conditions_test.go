@@ -254,12 +254,12 @@ func TestEvaluateWithKeys_StringEqualsResolvesVariables(t *testing.T) {
 		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice"}))
 }
 
-// A "${" the evaluator does not own is ordinary text in a condition value,
-// the way it was before variables were substituted at all.
-func TestEvaluateWithKeys_UnownedReferenceStaysLiteral(t *testing.T) {
+// A reference the evaluator does not support makes a condition non-matching,
+// even when the request value contains the placeholder text literally.
+func TestEvaluateWithKeys_UnsupportedReferenceDoesNotMatch(t *testing.T) {
 	for _, op := range []string{iampolicy.OpStringEquals, iampolicy.OpStringLike} {
 		d := condDoc(op, iampolicy.KeyS3Prefix, "reports/${quarter}")
-		assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
+		assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::b",
 			[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{
 				iampolicy.KeyS3Prefix: "reports/${quarter}", iampolicy.KeyUsername: "alice",
 			}), op)

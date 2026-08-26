@@ -161,12 +161,12 @@ func TestMatchesAnyResource(t *testing.T) {
 	assert.True(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, `arn:aws:s3:::b/a\bx`, nil))
 	assert.False(t, matchesAnyResource([]string{`arn:aws:s3:::b/a\b*`}, "arn:aws:s3:::b/abx", nil))
 
-	// "${" is a legal ARN byte sequence. A reference the evaluator does not
-	// own stays literal rather than silently matching nothing.
+	// Unsupported and malformed references match nothing, including resources
+	// containing the placeholder text literally.
 	env := []string{"arn:aws:s3:::b/${env}/*"}
-	assert.True(t, matchesAnyResource(env, "arn:aws:s3:::b/${env}/config", aliceKeys))
+	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/${env}/config", aliceKeys))
 	assert.False(t, matchesAnyResource(env, "arn:aws:s3:::b/prod/config", aliceKeys))
-	assert.True(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::b/${env", nil))
+	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::b/${env"}, "arn:aws:s3:::b/${env", nil))
 
 	// One unresolvable pattern does not veto the rest of the list.
 	mixed := []string{"arn:aws:s3:::home/${aws:username}/*", "arn:aws:s3:::public/*"}
