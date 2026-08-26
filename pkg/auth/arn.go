@@ -44,10 +44,6 @@ func ParseRoleARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "role")
 }
 
-// AWSManagedPolicyARNPrefix is the prefix of an AWS-managed policy ARN, whose
-// account segment is the literal "aws" rather than a numeric account ID.
-const AWSManagedPolicyARNPrefix = "arn:aws:iam::aws:policy/"
-
 // ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
 // of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). It
 // fails closed on a malformed ARN exactly as ParseRoleARN does. An AWS-managed
@@ -56,9 +52,10 @@ func ParsePolicyARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "policy")
 }
 
-// IsAWSManagedPolicyARN reports whether arn names an AWS-managed policy, which
-// has no backing document in this stack and is resolved from a builtin registry
-// (or to no grant at all) rather than from an account's policy store.
+// IsAWSManagedPolicyARN reports whether arn is a structurally valid AWS-managed
+// policy ARN. Such policies use the literal account "aws" and have no backing
+// document in an account's policy store.
 func IsAWSManagedPolicyARN(arn string) bool {
-	return strings.HasPrefix(arn, AWSManagedPolicyARNPrefix)
+	accountID, _, err := ParsePolicyARN(arn)
+	return err == nil && accountID == "aws"
 }

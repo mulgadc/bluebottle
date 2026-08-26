@@ -93,6 +93,8 @@ func TestIsAWSManagedPolicyARN(t *testing.T) {
 	}{
 		{"arn:aws:iam::aws:policy/AdministratorAccess", true},
 		{"arn:aws:iam::aws:policy/service-role/AmazonEKSWorkerNodePolicy", true},
+		{"arn:aws:iam::aws:policy/", false},
+		{"arn:aws:iam::aws:policy/service-role/", false},
 		{"arn:aws:iam::000000000001:policy/AdministratorAccess", false},
 		{"arn:aws:iam::aws:policy-backup/AdministratorAccess", false},
 		{"arn:aws:iam::awsx:policy/AdministratorAccess", false},
