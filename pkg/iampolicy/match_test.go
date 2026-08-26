@@ -77,6 +77,11 @@ func TestMatchWildcard(t *testing.T) {
 		{"a?c", "a?c", true},
 		{"abc", "a?c", false},
 
+		// An unescaped "*" in the pattern stays a wildcard even when the value
+		// contains a literal "*" at the same offset.
+		{"a*", "a*c", true},
+		{"a*c", "a*c", true},
+
 		// Backtracking.
 		{"a*b?c", "axxbyc", true},
 		{"*?", "a", true},

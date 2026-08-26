@@ -25,12 +25,12 @@ func MatchWildcard(pattern, value string) bool {
 	star, starV := -1, 0
 	for v < len(value) {
 		switch {
-		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == value[v]):
-			p++
-			v++
 		case p < len(pattern) && pattern[p] == '*':
 			star, starV = p, v
 			p++
+		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == value[v]):
+			p++
+			v++
 		case star >= 0:
 			starV++
 			p, v = star+1, starV
