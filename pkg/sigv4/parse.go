@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aws/smithy-go/encoding/httpbinding"
 )
 
 // parseOption configures Parse.
@@ -340,7 +342,7 @@ func parseURI(req *http.Request, service string) string {
 	// Other services double-encode each segment (the SigV4 default), preserving the "/" separators.
 	segments := strings.Split(req.URL.EscapedPath(), "/")
 	for i, segment := range segments {
-		segments[i] = uriEncode(segment)
+		segments[i] = httpbinding.EscapePath(segment, true)
 	}
 
 	return strings.Join(segments, "/")

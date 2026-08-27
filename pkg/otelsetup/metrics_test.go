@@ -143,8 +143,9 @@ func TestRecordRequestClientError4xx(t *testing.T) {
 	if attrs["s3.error_code"] != "NoSuchKey" {
 		t.Errorf("s3.error_code = %q, want NoSuchKey", attrs["s3.error_code"])
 	}
-	// outcome stays whatever the middleware bucketed (4xx isn't forced to
-	// "error" here since HTTPMiddleware only flips outcome on >=500).
+	// RecordRequest passes the caller's outcome through unchanged; it does not
+	// reclassify from the status, so this 404 keeps the "error" set above.
+	// HTTPMiddleware would bucket the same status as "client_error".
 	if attrs["outcome"] != "error" {
 		t.Errorf("outcome = %q, want error", attrs["outcome"])
 	}

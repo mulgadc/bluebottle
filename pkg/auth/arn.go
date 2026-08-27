@@ -14,16 +14,12 @@ func parseIAMARN(arn, resource string) (accountID, name string, err error) {
 	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "iam" || parts[3] != "" {
 		return "", "", errors.New("not an IAM ARN")
 	}
-	prefix := resource + "/"
-	if !strings.HasPrefix(parts[5], prefix) {
+	pathAndName, ok := strings.CutPrefix(parts[5], resource+"/")
+	if !ok {
 		return "", "", fmt.Errorf("ARN resource is not a %s", resource)
 	}
-	pathAndName := parts[5][len(prefix):]
-	if slash := strings.LastIndex(pathAndName, "/"); slash >= 0 {
-		name = pathAndName[slash+1:]
-	} else {
-		name = pathAndName
-	}
+	// LastIndex returning -1 makes the no-path case fall out as the whole string.
+	name = pathAndName[strings.LastIndex(pathAndName, "/")+1:]
 	if name == "" {
 		return "", "", fmt.Errorf("%s name is empty", resource)
 	}
@@ -50,6 +46,14 @@ func ParseRoleARN(arn string) (accountID, name string, err error) {
 // ARN parses with accountID "aws"; use IsAWSManagedPolicyARN to distinguish it.
 func ParsePolicyARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "policy")
+}
+
+// ParseInstanceProfileARN extracts the account ID and profile name from an IAM
+// instance-profile ARN of the form
+// arn:aws:iam::<accountID>:instance-profile/<path>/<name> (path optional). It
+// fails closed on a malformed ARN exactly as ParseRoleARN does.
+func ParseInstanceProfileARN(arn string) (accountID, name string, err error) {
+	return parseIAMARN(arn, "instance-profile")
 }
 
 // IsAWSManagedPolicyARN reports whether arn is a structurally valid AWS-managed

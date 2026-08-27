@@ -59,10 +59,11 @@ func requestInstruments() (metric.Int64Counter, metric.Float64Histogram, metric.
 }
 
 // RequestMetric is the set of attributes recorded for one handled HTTP
-// request. Outcome is "success"/"error", or empty when not observable at the
-// instrumentation point. ErrorCode is the real S3 error code (e.g.
-// "NoSuchBucket") and is empty on success. ReqBytes/RespBytes are the
-// request/response body sizes; zero means not known and is not recorded.
+// request. Outcome is "success"/"client_error"/"error" as OutcomeForStatus
+// maps them, or empty when not observable at the instrumentation point.
+// ErrorCode is the real S3 error code (e.g. "NoSuchBucket") and is empty on
+// success. ReqBytes/RespBytes are the request/response body sizes; zero means
+// not known and is not recorded.
 type RequestMetric struct {
 	Action     string
 	Outcome    string

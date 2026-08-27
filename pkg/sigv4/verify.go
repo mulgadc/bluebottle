@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
+
+	"github.com/aws/smithy-go/encoding/httpbinding"
 )
 
 const (
@@ -76,37 +79,34 @@ func (req *SignedRequest) canonicalRequest(redact bool) string {
 		}
 	}
 
-	sort.Slice(params, func(i, j int) bool {
+	slices.SortFunc(params, func(a, b queryParam) int {
 		// Key then value as separate fields, never the joined "k=v": '=' outranks the value
 		// bytes, so a key that is a prefix of another would sort wrong.
-		if params[i].key != params[j].key {
-			return params[i].key < params[j].key
+		if a.key != b.key {
+			return strings.Compare(a.key, b.key)
 		}
 
 		// Order on raw decoded bytes as AWS does (the SDK sorts req.URL.Query() before
 		// encoding); encoded order differs once a byte drops below the unreserved range, so
 		// "é" sorts after "a" but its "%C3%A9" encoding before it.
-		return params[i].value < params[j].value
+		return strings.Compare(a.value, b.value)
 	})
 
 	// Encode once, now that ordering is settled.
 	pairs := make([]string, len(params))
 	for i, p := range params {
-		value := uriEncode(p.value)
+		value := httpbinding.EscapePath(p.value, true)
 		if redact && strings.EqualFold(p.key, amzSessionName) {
 			value = redactedValue
 		}
 
-		pairs[i] = uriEncode(p.key) + "=" + value
+		pairs[i] = httpbinding.EscapePath(p.key, true) + "=" + value
 	}
 
 	// SigV4 signs the headers in sorted order, for both the header block and the list below.
-	signedHeaders := make([]string, 0, len(req.Canonical.SignedHeaders))
-	for name := range req.Canonical.SignedHeaders {
-		signedHeaders = append(signedHeaders, name)
-	}
-
-	sort.Strings(signedHeaders)
+	// Sized up front: slices.Sorted would grow by append doubling on a per-request path.
+	signedHeaders := slices.AppendSeq(make([]string, 0, len(req.Canonical.SignedHeaders)), maps.Keys(req.Canonical.SignedHeaders))
+	slices.Sort(signedHeaders)
 
 	// Canonical headers: "name:value\n" per signed header.
 	var headers strings.Builder
