@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.6
+	github.com/aws/smithy-go v1.27.8
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.70.0
@@ -22,7 +23,6 @@ require (
 )
 
 require (
-	github.com/aws/smithy-go v1.27.8 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect

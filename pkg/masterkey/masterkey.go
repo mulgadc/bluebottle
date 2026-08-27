@@ -49,7 +49,27 @@ func LoadShared(path string) (*Key, error) {
 	return load(path, 0o007, "0640")
 }
 
+// ReadShared returns the raw key bytes under the same permission gate and
+// length check LoadShared applies, for callers that must hold the bytes
+// themselves rather than an AEAD. Prefer LoadShared wherever a *Key will do.
+func ReadShared(path string) ([]byte, error) {
+	return readKey(path, 0o007, "0640")
+}
+
 func load(path string, denyMask os.FileMode, wantMode string) (*Key, error) {
+	raw, err := readKey(path, denyMask, wantMode)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := NewAEAD(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &Key{AEAD: aead, Fingerprint: Fingerprint(raw)}, nil
+}
+
+func readKey(path string, denyMask os.FileMode, wantMode string) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat master key %s: %w", path, err)
@@ -67,12 +87,7 @@ func load(path string, denyMask os.FileMode, wantMode string) (*Key, error) {
 	if len(raw) != MasterKeySize {
 		return nil, fmt.Errorf("master key %s must be %d bytes, got %d", path, MasterKeySize, len(raw))
 	}
-
-	aead, err := NewAEAD(raw)
-	if err != nil {
-		return nil, err
-	}
-	return &Key{AEAD: aead, Fingerprint: Fingerprint(raw)}, nil
+	return raw, nil
 }
 
 // New builds a *Key from raw 32-byte key material (AEAD + fingerprint), for

@@ -17,9 +17,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// withRecorder installs a recording tracer provider for the test and returns
+// withSpanRecorder installs a recording tracer provider for the test and returns
 // the recorder; the previous global provider is restored on cleanup.
-func withRecorder(t *testing.T) *tracetest.SpanRecorder {
+func withSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
 	sr := tracetest.NewSpanRecorder()
 	prev := otel.GetTracerProvider()
@@ -150,7 +150,7 @@ func TestStatusRecorderReadFromWithoutFastPath(t *testing.T) {
 }
 
 func TestHTTPMiddlewareSpanPerRequest(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 
 	h := HTTPMiddleware("test-server")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !trace.SpanContextFromContext(r.Context()).IsValid() {
@@ -184,7 +184,7 @@ func TestHTTPMiddlewareSpanPerRequest(t *testing.T) {
 }
 
 func TestHTTPMiddleware5xxSetsErrorStatus(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 
 	h := HTTPMiddleware("test-server")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -230,7 +230,7 @@ func TestOutcomeForStatusSeparatesClientErrors(t *testing.T) {
 // a client error is a distinct metric outcome but must not mark the span
 // failed, or every 404 would show as a broken request in the trace view.
 func TestHTTPMiddleware4xxIsNotSpanError(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 
 	h := HTTPMiddleware("test")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -247,7 +247,7 @@ func TestHTTPMiddleware4xxIsNotSpanError(t *testing.T) {
 }
 
 func TestWithUntracedPathsSkipsSpanButStillRecords(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 	var got []RequestMetric
 
 	h := HTTPMiddleware("test-server",
@@ -278,7 +278,7 @@ func TestWithUntracedPathsSkipsSpanButStillRecords(t *testing.T) {
 // TestWithUntracedPathsLeavesOtherPathsTraced keeps the skip path-scoped: an
 // option meant for probes must not silently untrace the whole server.
 func TestWithUntracedPathsLeavesOtherPathsTraced(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 
 	h := HTTPMiddleware("test-server", WithUntracedPaths("/health"))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -290,7 +290,7 @@ func TestWithUntracedPathsLeavesOtherPathsTraced(t *testing.T) {
 }
 
 func TestWithRecorderReplacesTheMetricSink(t *testing.T) {
-	withRecorder(t)
+	withSpanRecorder(t)
 	var got []RequestMetric
 
 	h := HTTPMiddleware("test-server",
@@ -314,7 +314,7 @@ func TestWithRecorderReplacesTheMetricSink(t *testing.T) {
 }
 
 func TestHTTPMiddlewareExtractsTraceparent(t *testing.T) {
-	sr := withRecorder(t)
+	sr := withSpanRecorder(t)
 	// Extraction needs the W3C propagator installed (Init does this even
 	// without an endpoint).
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
