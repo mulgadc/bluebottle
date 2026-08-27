@@ -1,6 +1,8 @@
 GO_PROJECT_NAME := bluebottle
 SHELL := /bin/bash
 
+export GOFIPS140 := v1.0.0
+
 # Quiet-mode filters (active when QUIET=1, set by preflight via recursive make)
 # Note: grep pipelines use PIPESTATUS[0] so the exit status of `go test`
 # propagates through the filter — otherwise a test failure is swallowed by
