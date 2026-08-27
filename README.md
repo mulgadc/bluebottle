@@ -18,13 +18,14 @@
 
 # Bluebottle: the shared library for the Mulga stack
 
-Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperblock and Northstar all need — request signing, policy evaluation, ARN handling, encryption at rest, telemetry, rate limiting — so that they do not depend on another service repo to get them.
+Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperblock and Northstar all need, so that they do not depend on another service repo to get them.
 
 ## Packages
 
 | Package | Purpose |
 | --- | --- |
 | [`pkg/auth`](pkg/auth) | ARN parsing and formatting |
+| [`pkg/fipsboot`](pkg/fipsboot) | FIPS 140-3 startup enforcement via blank import |
 | [`pkg/iampolicy`](pkg/iampolicy) | IAM policy types, matching and evaluation |
 | [`pkg/masterkey`](pkg/masterkey) | Master key loading, derivation and AEAD encryption |
 | [`pkg/otelsetup`](pkg/otelsetup) | OpenTelemetry tracer/meter/logger bootstrap, slog bridge, HTTP instrumentation, log sanitisation |
@@ -38,10 +39,10 @@ Bluebottle sits below every service in the Mulga stack and depends on none of th
 
 | Repository | What it uses |
 | --- | --- |
-| **[Spinifex](https://github.com/mulgadc/spinifex)** | All seven packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry, rate limiting and the TLS curve allowlist across services |
-| **[Predastore](https://github.com/mulgadc/predastore)** | S3 request signing, IAM policy evaluation, encryption at rest, telemetry, rate limiting, TLS curve allowlist |
-| **[Viperblock](https://github.com/mulgadc/viperblock)** | Master keys for volume encryption, telemetry |
-| **[Northstar](https://github.com/mulgadc/northstar)** | Telemetry |
+| **[Spinifex](https://github.com/mulgadc/spinifex)** | All eight packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry, rate limiting, the TLS curve allowlist and the FIPS guard across services |
+| **[Predastore](https://github.com/mulgadc/predastore)** | S3 request signing, IAM policy evaluation, encryption at rest, telemetry, rate limiting, TLS curve allowlist, FIPS guard |
+| **[Viperblock](https://github.com/mulgadc/viperblock)** | Master keys for volume encryption, telemetry, FIPS guard |
+| **[Northstar](https://github.com/mulgadc/northstar)** | Telemetry, FIPS guard |
 
 ## Trademarks
 
