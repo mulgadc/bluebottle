@@ -30,6 +30,7 @@ Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperb
 | [`pkg/masterkey`](pkg/masterkey) | Master key loading, derivation and AEAD encryption |
 | [`pkg/otelsetup`](pkg/otelsetup) | OpenTelemetry tracer/meter/logger bootstrap, slog bridge, HTTP instrumentation, log sanitisation |
 | [`pkg/ratelimit`](pkg/ratelimit) | Token bucket rate limiting and its configuration |
+| [`pkg/safecast`](pkg/safecast) | Range-checked integer conversions |
 | [`pkg/sigv4`](pkg/sigv4) | AWS SigV4 parsing, verification and URI canonicalisation |
 | [`pkg/tlsconfig`](pkg/tlsconfig) | Cluster-wide TLS 1.3 curve allowlist |
 
@@ -39,9 +40,9 @@ Bluebottle sits below every service in the Mulga stack and depends on none of th
 
 | Repository | What it uses |
 | --- | --- |
-| **[Spinifex](https://github.com/mulgadc/spinifex)** | All eight packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry, rate limiting, the TLS curve allowlist and the FIPS guard across services |
+| **[Spinifex](https://github.com/mulgadc/spinifex)** | All nine packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry, rate limiting, the TLS curve allowlist, the FIPS guard and the conversion helpers across services |
 | **[Predastore](https://github.com/mulgadc/predastore)** | S3 request signing, IAM policy evaluation, encryption at rest, telemetry, rate limiting, TLS curve allowlist, FIPS guard |
-| **[Viperblock](https://github.com/mulgadc/viperblock)** | Master keys for volume encryption, telemetry, FIPS guard |
+| **[Viperblock](https://github.com/mulgadc/viperblock)** | Master keys for volume encryption, telemetry, FIPS guard, conversion helpers |
 | **[Northstar](https://github.com/mulgadc/northstar)** | Telemetry, FIPS guard |
 
 ## Trademarks
