@@ -104,7 +104,9 @@ func (req *SignedRequest) canonicalRequest(redact bool) string {
 	}
 
 	// SigV4 signs the headers in sorted order, for both the header block and the list below.
-	signedHeaders := slices.Sorted(maps.Keys(req.Canonical.SignedHeaders))
+	// Sized up front: slices.Sorted would grow by append doubling on a per-request path.
+	signedHeaders := slices.AppendSeq(make([]string, 0, len(req.Canonical.SignedHeaders)), maps.Keys(req.Canonical.SignedHeaders))
+	slices.Sort(signedHeaders)
 
 	// Canonical headers: "name:value\n" per signed header.
 	var headers strings.Builder

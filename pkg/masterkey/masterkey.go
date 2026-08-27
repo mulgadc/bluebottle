@@ -1,10 +1,12 @@
 // Package masterkey loads the cluster master key from disk and turns it into
 // an AES-256-GCM cipher.AEAD used to seal and open shard fragments at rest.
 //
-// Load is the only path that touches the raw 32-byte key on disk. It returns
-// a *Key whose AEAD field is the only handle production code holds — the
-// underlying key bytes are not retained on the Key. Callers identify a key
-// via Key.Fingerprint instead of logging raw bytes.
+// Load and LoadShared return a *Key whose AEAD field is the only handle
+// production code holds — the underlying key bytes are not retained on the
+// Key. Callers identify a key via Key.Fingerprint instead of logging raw
+// bytes. ReadShared is the one exception: it returns the raw bytes, for
+// callers that must pass key material on rather than seal with it. Prefer a
+// *Key wherever one will do.
 package masterkey
 
 import (
