@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/banner.svg" alt="Bluebottle by Mulga — the shared Go library behind Spinifex, Predastore, Viperblock and Northstar: SigV4 signing, IAM policy evaluation, ARNs, master keys, telemetry and rate limiting." width="900">
+  <img src=".github/assets/banner.svg" alt="Bluebottle by Mulga — the shared Go library behind Spinifex, Predastore, Viperblock and Northstar" width="900">
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 
 # Bluebottle: the shared library for the Mulga stack
 
-Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperblock and Northstar all need — request signing, policy evaluation, ARN handling, encryption at rest, telemetry and rate limiting — so that they do not depend on another service repo to get them.
+Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperblock and Northstar all need — request signing, policy evaluation, ARN handling, encryption at rest, telemetry, rate limiting — so that they do not depend on another service repo to get them.
 
 ## Packages
 
@@ -30,6 +30,7 @@ Bluebottle holds the cross-cutting Go packages that Spinifex, Predastore, Viperb
 | [`pkg/otelsetup`](pkg/otelsetup) | OpenTelemetry tracer/meter/logger bootstrap, slog bridge, HTTP instrumentation, log sanitisation |
 | [`pkg/ratelimit`](pkg/ratelimit) | Token bucket rate limiting and its configuration |
 | [`pkg/sigv4`](pkg/sigv4) | AWS SigV4 parsing, verification and URI canonicalisation |
+| [`pkg/tlsconfig`](pkg/tlsconfig) | Cluster-wide TLS 1.3 curve allowlist |
 
 ## Stack Integration
 
@@ -37,8 +38,8 @@ Bluebottle sits below every service in the Mulga stack and depends on none of th
 
 | Repository | What it uses |
 | --- | --- |
-| **[Spinifex](https://github.com/mulgadc/spinifex)** | All six packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry and rate limiting across services |
-| **[Predastore](https://github.com/mulgadc/predastore)** | S3 request signing, IAM policy evaluation, encryption at rest, telemetry, rate limiting |
+| **[Spinifex](https://github.com/mulgadc/spinifex)** | All seven packages: SigV4 and IAM for the AWS gateway, master keys for credential storage, telemetry, rate limiting and the TLS curve allowlist across services |
+| **[Predastore](https://github.com/mulgadc/predastore)** | S3 request signing, IAM policy evaluation, encryption at rest, telemetry, rate limiting, TLS curve allowlist |
 | **[Viperblock](https://github.com/mulgadc/viperblock)** | Master keys for volume encryption, telemetry |
 | **[Northstar](https://github.com/mulgadc/northstar)** | Telemetry |
 
