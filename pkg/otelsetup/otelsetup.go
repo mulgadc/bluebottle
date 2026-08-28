@@ -1,7 +1,10 @@
 // Package otelsetup configures OpenTelemetry tracing, metrics and logging for
 // Mulga services. Export is gated on the standard OTLP environment variables;
 // with no endpoint configured Init is a functional no-op, so instrumented
-// binaries ship everywhere at zero cost.
+// binaries ship everywhere at zero cost. The installed MeterProvider also
+// carries a view that gives every second-unit histogram explicit bucket
+// boundaries, because the SDK default boundaries are a millisecond scale and
+// silently collapse second-valued latencies into a single bucket.
 package otelsetup
 
 import (
@@ -112,6 +115,7 @@ func Init(ctx context.Context, serviceName string, opts ...Option) (func(context
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)),
 		sdkmetric.WithResource(res),
+		sdkmetric.WithView(secondsHistogramView()),
 	)
 	otel.SetMeterProvider(mp)
 	installed = append(installed, mp.Shutdown)
@@ -161,6 +165,36 @@ func shutdownAll(installed []func(context.Context) error) error {
 		errs = errors.Join(errs, stop(ctx))
 	}
 	return errs
+}
+
+// secondsHistogramBoundaries bounds every second-unit duration histogram
+// installed through Init, across every Mulga service. The SDK's default
+// boundaries run 0..10000 and only make sense for a millisecond scale: every
+// second-valued sample below 5 lands in the first bucket and every
+// percentile reads back as that bucket's centroid. These match predastore's
+// own per-instrument boundaries as a prefix, with 30 added as a wider top
+// bucket for operations slower than a shard read.
+var secondsHistogramBoundaries = []float64{
+	0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+}
+
+// secondsHistogramView applies secondsHistogramBoundaries to every
+// second-unit histogram the MeterProvider collects, regardless of which
+// service or instrument records it. Fixing this at the provider, rather
+// than per instrument, means the boundaries apply to instruments nobody
+// has written yet, and no call site has to remember to set them.
+func secondsHistogramView() sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{
+			Kind: sdkmetric.InstrumentKindHistogram,
+			Unit: "s",
+		},
+		sdkmetric.Stream{
+			Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: secondsHistogramBoundaries,
+			},
+		},
+	)
 }
 
 // rootSampler samples locally-rooted traces at MULGA_ROOT_TRACE_RATIO
