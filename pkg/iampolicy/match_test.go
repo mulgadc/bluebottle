@@ -195,6 +195,80 @@ func TestMatchesAnyResource_FailClosedMatchesUnresolvable(t *testing.T) {
 	assert.False(t, matchesAnyResource([]string{"arn:aws:s3:::other/*"}, "arn:aws:s3:::b/x", nil, true))
 }
 
+// The whole pattern grammar end to end through matchesAnyResource, in both
+// arms. Each case names whether the pattern is unresolvable, and the closed arm
+// is derived from that rather than written out: an unresolvable pattern matches
+// under failClosed, everything else behaves identically in both arms.
+func TestMatchesAnyResource_PatternGrammar(t *testing.T) {
+	const b = "arn:aws:s3:::b/"
+	star := ConditionKeys{KeyUsername: "a*c"}
+	question := ConditionKeys{KeyUsername: "a?c"}
+	backslash := ConditionKeys{KeyUsername: `a\c`}
+	empty := ConditionKeys{KeyUsername: ""}
+
+	tests := []struct {
+		pattern      string
+		value        string
+		keys         ConditionKeys
+		want         bool
+		unresolvable bool
+	}{
+		// The metacharacters, with no reference in play.
+		{b + "*", b + "anything", aliceKeys, true, false},
+		{b + "a?c", b + "abc", aliceKeys, true, false},
+		{b + "a?c", b + "ac", aliceKeys, false, false},
+
+		// AWS's literal escapes: the only way to write a metacharacter.
+		{b + "${*}", b + "*", aliceKeys, true, false},
+		{b + "${*}", b + "x", aliceKeys, false, false},
+		{b + "${?}", b + "?", aliceKeys, true, false},
+		{b + "${?}", b + "x", aliceKeys, false, false},
+		{b + "${$}", b + "$", aliceKeys, true, false},
+		{b + "${$}{aws:username}", b + "${aws:username}", aliceKeys, true, false},
+
+		// A reference adjacent to a metacharacter keeps both meanings.
+		{b + "${aws:username}*", b + "alice-2024", aliceKeys, true, false},
+		{b + "${aws:username}*", b + "bob-2024", aliceKeys, false, false},
+		{b + "*${aws:username}", b + "2024-alice", aliceKeys, true, false},
+		{b + "?${aws:username}", b + "-alice", aliceKeys, true, false},
+		{b + "${aws:username}${aws:userid}", b + "aliceAIDAALICE", aliceKeys, true, false},
+
+		// A substituted value never acts as a wildcard, however it is spelled.
+		{b + "${aws:username}", b + "a*c", star, true, false},
+		{b + "${aws:username}", b + "abc", star, false, false},
+		{b + "${aws:username}/*", b + "abc/x", star, false, false},
+		{b + "${aws:username}", b + "a?c", question, true, false},
+		{b + "${aws:username}", b + "abc", question, false, false},
+		{b + "${aws:username}", `arn:aws:s3:::b/a\c`, backslash, true, false},
+		{b + "${aws:username}", b + "ac", backslash, false, false},
+
+		// Present but empty substitutes empty; it is not absent.
+		{b + "${aws:username}/x", b + "/x", empty, true, false},
+
+		// Malformed and unsupported references resolve to nothing, so they match
+		// under failClosed and nothing under it.
+		{b + "${", b + "${", aliceKeys, false, true},
+		{b + "${}", b + "${}", aliceKeys, false, true},
+		{b + "${aws:username", b + "alice", aliceKeys, false, true},
+		{b + "${aws:${aws:username}}", b + "alice", aliceKeys, false, true},
+		{b + "${nonsense}", b + "anything", aliceKeys, false, true},
+		{b + "${aws:SourceIp}", b + "10.1.2.3", aliceKeys, false, true},
+		{b + "${aws:username}", b + "alice", nil, false, true},
+
+		// A "$" that opens nothing is ordinary text.
+		{b + "$aws:username", b + "$aws:username", aliceKeys, true, false},
+		{b + "$aws:username", b + "alice", aliceKeys, false, false},
+	}
+
+	for _, tt := range tests {
+		patterns := []string{tt.pattern}
+		assert.Equal(t, tt.want, matchesAnyResource(patterns, tt.value, tt.keys, false),
+			"open arm: matchesAnyResource(%q, %q)", tt.pattern, tt.value)
+		assert.Equal(t, tt.want || tt.unresolvable, matchesAnyResource(patterns, tt.value, tt.keys, true),
+			"closed arm: matchesAnyResource(%q, %q)", tt.pattern, tt.value)
+	}
+}
+
 // TestMatchesAny covers the case-fold flag: actions fold (true), resources are
 // exact-case (false).
 func TestMatchesAny(t *testing.T) {
