@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/mulgadc/bluebottle/pkg/auth"
@@ -103,4 +104,69 @@ func TestIsAWSManagedPolicyARN(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, auth.IsAWSManagedPolicyARN(tt.arn), "IsAWSManagedPolicyARN(%q)", tt.arn)
 	}
+}
+
+// TestResolveRoleARN pins the comparison a caller-supplied role ARN rests on.
+// The lookup is keyed by name and discards any path the caller wrote, so an ARN
+// that is not the stored one must not reach the role its trailing name matches.
+func TestResolveRoleARN(t *testing.T) {
+	stored := map[string]string{
+		"admin":      "arn:aws:iam::000000000001:role/admin",
+		"app-worker": "arn:aws:iam::000000000001:role/team/app-worker",
+		"ghost":      "",
+	}
+	lookup := func(_, roleName string) (string, error) {
+		arn, ok := stored[roleName]
+		if !ok {
+			return "", errors.New("NoSuchEntity")
+		}
+		return arn, nil
+	}
+
+	t.Run("a stored ARN resolves", func(t *testing.T) {
+		account, name, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/admin", lookup)
+		require.NoError(t, err)
+		assert.Equal(t, "000000000001", account)
+		assert.Equal(t, "admin", name)
+	})
+
+	t.Run("a pathed role resolves by its full stored ARN", func(t *testing.T) {
+		_, name, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/team/app-worker", lookup)
+		require.NoError(t, err)
+		assert.Equal(t, "app-worker", name)
+	})
+
+	t.Run("an invented path does not reach the role it names", func(t *testing.T) {
+		_, _, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/decoy/admin", lookup)
+		require.ErrorIs(t, err, auth.ErrRoleARNMismatch)
+	})
+
+	t.Run("a pathed role is not reachable by its pathless ARN", func(t *testing.T) {
+		_, _, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/app-worker", lookup)
+		require.ErrorIs(t, err, auth.ErrRoleARNMismatch)
+	})
+
+	t.Run("an empty stored ARN never matches", func(t *testing.T) {
+		_, _, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/ghost", lookup)
+		require.ErrorIs(t, err, auth.ErrRoleARNMismatch)
+	})
+
+	t.Run("a malformed ARN is not looked up", func(t *testing.T) {
+		called := false
+		_, _, err := auth.ResolveRoleARN("not-an-arn", func(_, _ string) (string, error) {
+			called = true
+			return "", nil
+		})
+		require.ErrorIs(t, err, auth.ErrInvalidRoleARN)
+		assert.False(t, called, "lookup must not run for a malformed ARN")
+	})
+
+	t.Run("a lookup error passes through", func(t *testing.T) {
+		sentinel := errors.New("kv unavailable")
+		_, _, err := auth.ResolveRoleARN("arn:aws:iam::000000000001:role/admin", func(_, _ string) (string, error) {
+			return "", sentinel
+		})
+		require.ErrorIs(t, err, sentinel)
+		assert.NotErrorIs(t, err, auth.ErrRoleARNMismatch)
+	})
 }

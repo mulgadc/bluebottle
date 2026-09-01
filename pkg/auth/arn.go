@@ -40,6 +40,37 @@ func ParseRoleARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "role")
 }
 
+// ErrInvalidRoleARN reports a role ARN that does not parse. ErrRoleARNMismatch
+// reports one that parses but is not the ARN the store holds for the role it
+// names, which callers must treat as an implicit deny.
+var (
+	ErrInvalidRoleARN  = errors.New("malformed role ARN")
+	ErrRoleARNMismatch = errors.New("role ARN is not the stored ARN for that role")
+)
+
+// RoleARNLookup returns the canonical ARN the store holds for a role, or an
+// error if it cannot be read.
+type RoleARNLookup func(accountID, roleName string) (storedARN string, err error)
+
+// ResolveRoleARN resolves the role a caller-supplied ARN names and verifies the
+// ARN is the one the store holds. ParseRoleARN discards any path, so comparing
+// the stored ARN back is what stops an invented path reaching a role the ARN
+// does not name. An error from lookup is returned unwrapped.
+func ResolveRoleARN(roleARN string, lookup RoleARNLookup) (accountID, roleName string, err error) {
+	accountID, roleName, err = ParseRoleARN(roleARN)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %w", ErrInvalidRoleARN, err)
+	}
+	storedARN, err := lookup(accountID, roleName)
+	if err != nil {
+		return "", "", err
+	}
+	if storedARN != roleARN {
+		return "", "", ErrRoleARNMismatch
+	}
+	return accountID, roleName, nil
+}
+
 // ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
 // of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). It
 // fails closed on a malformed ARN exactly as ParseRoleARN does. An AWS-managed
