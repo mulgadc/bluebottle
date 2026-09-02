@@ -122,6 +122,50 @@ func TestUnsupportedVariable(t *testing.T) {
 	}
 }
 
+// The fault a write path words its rejection from. The last two rows are why it
+// cannot be inferred downstream: the same key name is reported for a closed
+// reference and for an unterminated one, and the value can end with either.
+func TestUnresolvableVariable_Fault(t *testing.T) {
+	tests := []struct {
+		in    string
+		key   string
+		fault VariableFault
+	}{
+		{"arn:aws:s3:::home/${aws:username}/*", "", VariableOK},
+		{"home/${bogus}/*", "bogus", VariableUnknownKey},
+		{"home/${aws:userid}/*", "aws:userid", VariableUnknownKey},
+		{"home/${aws:username", "aws:username", VariableUnterminated},
+		{"${}", "", VariableUnknownKey},
+
+		// The first fault wins. This row is the one a caller cannot infer: the
+		// value ends with "${aws:username", yet the fault reported is the
+		// unknown key that precedes it.
+		{"a/${bogus}/b/${aws:username", "bogus", VariableUnknownKey},
+
+		// A single forward scan, so the first "}" closes the first "${" however
+		// far apart they are: the text between them is one unknown key rather
+		// than an unterminated reference followed by a second one.
+		{"a/${aws:username/b/${bogus}", "aws:username/b/${bogus", VariableUnknownKey},
+	}
+
+	for _, tt := range tests {
+		key, fault := UnresolvableVariable(tt.in)
+		assert.Equal(t, tt.fault, fault, "UnresolvableVariable(%q) fault", tt.in)
+		assert.Equal(t, tt.key, key, "UnresolvableVariable(%q) key", tt.in)
+	}
+}
+
+// SubstitutableKeys is read across a module boundary and its result is rewritten
+// in place there, so a cached or shared slice would corrupt the next caller.
+func TestSubstitutableKeys_AreSortedAndCallerOwned(t *testing.T) {
+	assert.Equal(t, []string{KeyPrincipalAccount, KeyUsername}, SubstitutableKeys())
+
+	first := SubstitutableKeys()
+	first[0] = "clobbered"
+	assert.Equal(t, []string{KeyPrincipalAccount, KeyUsername}, SubstitutableKeys(),
+		"SubstitutableKeys handed out a slice a caller can mutate under the next caller")
+}
+
 // A literal escape must not collide with a real key name.
 func TestSubstitutableKeys_AreDisjointFromLiterals(t *testing.T) {
 	for name := range literalVariables {
