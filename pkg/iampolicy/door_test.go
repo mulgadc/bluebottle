@@ -158,8 +158,8 @@ func doorCases() []doorCase {
 			}),
 		},
 		{
-			// aws:userid is substitutable but no door supplies it, so every
-			// pattern naming it fails closed at every door.
+			// aws:userid is not substitutable, because no door supplies it, so
+			// every pattern naming it fails closed at every door.
 			name:     "aws:userid as a resource variable",
 			resource: testResource + "/AIDAALICE/q.csv",
 			stmt:     iampolicy.Statement{Resource: iampolicy.StringOrArr{testResource + "/${aws:userid}/*"}},

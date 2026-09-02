@@ -30,13 +30,11 @@ var allOperators = []string{
 	iampolicy.OpBool,
 }
 
-// aws:userid is substitutable but no door supplies it, so a resource pattern
-// naming it is unresolvable everywhere: an Allow grants nothing and a Deny fires
-// against every resource. Removing it from the substitutable set, or supplying it
-// at a door, both fail here and both want thinking about first.
-var variablesNoDoorSupplies = map[string]string{
-	iampolicy.KeyUserID: "no door resolves a principal's unique ID",
-}
+// Empty on purpose: every substitutable key is supplied by a door, so the gate
+// below has no excuses left to grant. Adding a key here admits a reference that
+// is unresolvable everywhere, where an Allow grants nothing and a Deny fires
+// against every resource — say why, or supply the key at a door instead.
+var variablesNoDoorSupplies = map[string]string{}
 
 // conditionKey reports whether any operator enforces key.
 func conditionKey(key string) bool {

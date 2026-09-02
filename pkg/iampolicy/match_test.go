@@ -231,7 +231,7 @@ func TestMatchesAnyResource_PatternGrammar(t *testing.T) {
 		{b + "${aws:username}*", b + "bob-2024", aliceKeys, false, false},
 		{b + "*${aws:username}", b + "2024-alice", aliceKeys, true, false},
 		{b + "?${aws:username}", b + "-alice", aliceKeys, true, false},
-		{b + "${aws:username}${aws:userid}", b + "aliceAIDAALICE", aliceKeys, true, false},
+		{b + "${aws:username}${aws:PrincipalAccount}", b + "alice000000000001", aliceKeys, true, false},
 
 		// A substituted value never acts as a wildcard, however it is spelled.
 		{b + "${aws:username}", b + "a*c", star, true, false},

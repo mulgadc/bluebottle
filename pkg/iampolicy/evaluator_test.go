@@ -377,7 +377,8 @@ func TestEvaluate_SubstitutedValueIsNotReexpanded(t *testing.T) {
 		"arn:aws:s3:::home/${aws:userid}/object", p, keys))
 }
 
-// The account and user-ID variables resolve from the same context.
+// The account variable resolves; aws:userid does not, even when the context
+// carries it, because no door supplies it and it is not substitutable.
 func TestEvaluate_AccountAndUserIDVariables(t *testing.T) {
 	keys := iampolicy.ConditionKeys{
 		iampolicy.KeyPrincipalAccount: "000000000001", iampolicy.KeyUserID: "AIDAALICE",
@@ -386,7 +387,13 @@ func TestEvaluate_AccountAndUserIDVariables(t *testing.T) {
 	assert.Equal(t, iampolicy.Allow,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::000000000001/k", account, keys))
 
+	// An Allow naming it selects nothing, and a Deny selects everything: the
+	// fail-closed arms the write-path gate now rejects the policy for.
 	userID := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", "arn:aws:s3:::u/${aws:userid}/*")}
-	assert.Equal(t, iampolicy.Allow,
+	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::u/AIDAALICE/k", userID, keys))
+
+	denyUserID := []iampolicy.PolicyDocument{doc("Deny", "s3:GetObject", "arn:aws:s3:::u/${aws:userid}/*")}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::u/bob/k", denyUserID, keys))
 }

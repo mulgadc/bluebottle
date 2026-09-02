@@ -6,7 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// aliceKeys is the condition context of a request from user alice.
+// aliceKeys is the condition context of a request from user alice. It carries
+// aws:userid, which no real door supplies, so the cases below pin that the key
+// is unresolvable because it is not substitutable rather than because it is
+// missing from the context.
 var aliceKeys = ConditionKeys{
 	KeyUsername:         "alice",
 	KeyPrincipalAccount: "000000000001",
@@ -25,8 +28,7 @@ func TestExpandVariables(t *testing.T) {
 		{"no reference", "arn:aws:s3:::home/*", aliceKeys, "arn:aws:s3:::home/*", expansionLiteral},
 		{"username", "arn:aws:s3:::home/${aws:username}/*", aliceKeys, "arn:aws:s3:::home/alice/*", expansionResolved},
 		{"account", "${aws:PrincipalAccount}", aliceKeys, "000000000001", expansionResolved},
-		{"userid", "${aws:userid}", aliceKeys, "AIDAALICE", expansionResolved},
-		{"two references", "${aws:username}-${aws:userid}", aliceKeys, "alice-AIDAALICE", expansionResolved},
+		{"two references", "${aws:username}-${aws:PrincipalAccount}", aliceKeys, "alice-000000000001", expansionResolved},
 
 		// A door that cannot supply the key makes the pattern unresolvable.
 		{"absent key", "home/${aws:username}/*", ConditionKeys{}, "", expansionUnresolvable},
@@ -34,6 +36,7 @@ func TestExpandVariables(t *testing.T) {
 
 		// Unsupported and malformed references make the pattern unresolvable.
 		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "", expansionUnresolvable},
+		{"userid", "${aws:userid}", aliceKeys, "", expansionUnresolvable},
 		{"unknown key", "home/${nonsense}/*", aliceKeys, "", expansionUnresolvable},
 		{"unterminated", "home/${aws:username", aliceKeys, "", expansionUnresolvable},
 
@@ -99,7 +102,8 @@ func TestUnsupportedVariable(t *testing.T) {
 	}{
 		{"arn:aws:s3:::home/*", "", false},
 		{"arn:aws:s3:::home/${aws:username}/*", "", false},
-		{"${aws:PrincipalAccount}/${aws:userid}", "", false},
+		{"${aws:PrincipalAccount}/${aws:username}", "", false},
+		{"${aws:PrincipalAccount}/${aws:userid}", "aws:userid", true},
 		{"${*}${?}${$}", "", false},
 		{"home/${aws:SourceIp}/*", "aws:SourceIp", true},
 		{"home/${nonsense}/*", "nonsense", true},

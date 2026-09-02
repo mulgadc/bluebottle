@@ -1,16 +1,32 @@
 package iampolicy
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
-// variablePrefix opens a policy variable, as in home/${aws:username}/*.
-const variablePrefix = "${"
+// VariablePrefix opens a policy variable, as in home/${aws:username}/*.
+const VariablePrefix = "${"
 
 // substitutableKeys are the ${key} references the evaluator can resolve:
 // deliberately not supportedConditions, but the keys identifying the caller.
+// KeyUserID is absent because no door supplies it, which would make a pattern
+// naming it unresolvable everywhere rather than only at some doors.
 var substitutableKeys = map[string]bool{
 	KeyUsername:         true,
 	KeyPrincipalAccount: true,
-	KeyUserID:           true,
+}
+
+// SubstitutableKeys returns the keys a ${...} reference may name, sorted, for a
+// write path to name in the error it rejects an unsupported reference with. It
+// reads the registry the evaluator expands against, so the two cannot drift.
+func SubstitutableKeys() []string {
+	keys := make([]string, 0, len(substitutableKeys))
+	for key := range substitutableKeys {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // literalVariables are AWS's escape forms: ${*}, ${?} and ${$} stand for the
@@ -22,11 +38,11 @@ var literalVariables = map[string]string{"*": "*", "?": "?", "$": "$"}
 // inert at every door. An unterminated "${" reports the remaining text.
 func UnsupportedVariable(s string) (key string, found bool) {
 	for i := 0; i < len(s); {
-		open := strings.Index(s[i:], variablePrefix)
+		open := strings.Index(s[i:], VariablePrefix)
 		if open < 0 {
 			return "", false
 		}
-		i += open + len(variablePrefix)
+		i += open + len(VariablePrefix)
 		end := strings.IndexByte(s[i:], '}')
 		if end < 0 {
 			return s[i:], true
@@ -70,7 +86,7 @@ const (
 // escapes metacharacters in substituted values, so a value cannot act as a
 // wildcard when matchGlob reads the result back.
 func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, expansion) {
-	if !strings.Contains(s, variablePrefix) {
+	if !strings.Contains(s, VariablePrefix) {
 		return s, expansionLiteral
 	}
 
@@ -82,13 +98,13 @@ func expandVariables(s string, keys ConditionKeys, escapeMeta bool) (string, exp
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
-		open := strings.Index(s[i:], variablePrefix)
+		open := strings.Index(s[i:], VariablePrefix)
 		if open < 0 {
 			writeEscaped(&b, s[i:], textChars)
 			break
 		}
 		writeEscaped(&b, s[i:i+open], textChars)
-		i += open + len(variablePrefix)
+		i += open + len(VariablePrefix)
 
 		end := strings.IndexByte(s[i:], '}')
 		if end < 0 {
