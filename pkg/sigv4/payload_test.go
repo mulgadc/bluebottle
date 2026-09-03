@@ -130,3 +130,188 @@ func TestVerifyStreamsLargePayload(t *testing.T) {
 		})
 	}
 }
+
+// largeSignedBody signs a body over MaxPayloadLen under digest, runs the signature check, and
+// returns the streaming body a handler would be given. wrap replaces what the wrapper reads
+// from, so a test can choose how the transport frames its reads.
+func largeSignedBody(tb testing.TB, sent []byte, digest string, wrap func([]byte) io.ReadCloser) io.ReadCloser {
+	tb.Helper()
+
+	req := signS3(tb, sent, digest)
+	if wrap != nil {
+		req.Body = wrap(sent)
+	}
+
+	signed, err := sigv4.Parse(req, sigv4.WithTime(oracleTime))
+	if err != nil {
+		tb.Fatalf("Parse: %v", err)
+	}
+
+	if _, err := signed.Verify(oracleSecret, "us-east-1", "s3"); err != nil {
+		tb.Fatalf("Verify: %v", err)
+	}
+
+	return req.Body
+}
+
+// eofWithData returns the last of its bytes and io.EOF from the same Read. io.ReadAtLeast is
+// free to discard an error paired with a full byte count, so a wrapper that reports the
+// mismatch that way alone reports it to nobody.
+type eofWithData struct{ b []byte }
+
+func (r *eofWithData) Read(p []byte) (int, error) {
+	n := copy(p, r.b)
+	r.b = r.b[n:]
+
+	if len(r.b) == 0 {
+		return n, io.EOF
+	}
+
+	return n, nil
+}
+
+func (r *eofWithData) Close() error { return nil }
+
+// shortBody hands over its bytes and then fails, standing in for a transport that ends a body
+// before the length the request declared.
+type shortBody struct {
+	b   []byte
+	err error
+}
+
+func (r *shortBody) Read(p []byte) (int, error) {
+	if len(r.b) == 0 {
+		return 0, r.err
+	}
+
+	n := copy(p, r.b)
+	r.b = r.b[n:]
+
+	return n, nil
+}
+
+func (r *shortBody) Close() error { return nil }
+
+// TestVerifyLargePayloadRejectsTruncatedBody covers a streamed body that ends before its
+// declared length. It can no more hash to the signed digest than a rewritten one can, so it
+// has to fail as a mismatch rather than as the read error that would answer 500. Each
+// protocol says so in its own words, and the bytes still owed are what decide it.
+func TestVerifyLargePayloadRejectsTruncatedBody(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "http/1.1", err: io.ErrUnexpectedEOF},
+		{
+			name: "http/2",
+			err:  errors.New("request declared a Content-Length of 10485761 but only wrote 5242880 bytes"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := largeSignedBody(t, body, sha256Hex(body), func(b []byte) io.ReadCloser {
+				return &shortBody{b: b[:len(b)/2], err: tc.err}
+			})
+
+			if _, err := io.ReadAll(rc); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+				t.Fatalf("read truncated body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+			}
+		})
+	}
+}
+
+// TestVerifyUnsizedBodyDoesNotBlameTheSignature covers a body of unknown length whose bytes all
+// arrive and hash correctly, but whose framing is cut before the terminating chunk. Nothing is
+// owed against a length that was never declared, so a framing fault must not be reported as a
+// payload the client signed for and did not send.
+func TestVerifyUnsizedBodyDoesNotBlameTheSignature(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+
+	// Signed with no length at all, the way a chunked-transfer request arrives: the signer
+	// leaves content-length out of the signature, so it cannot be removed afterwards.
+	req, err := http.NewRequest(http.MethodPut, "https://"+oracleHost+"/object.txt", &shortBody{b: body, err: io.ErrUnexpectedEOF})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	req.ContentLength = -1
+	req.Header.Set("X-Amz-Content-Sha256", sha256Hex(body))
+
+	creds := aws.Credentials{AccessKeyID: oracleAKID, SecretAccessKey: oracleSecret}
+	if err := v4.NewSigner().SignHTTP(context.Background(), creds, req, sha256Hex(body), "s3", "us-east-1", oracleTime, s3Opts("s3")...); err != nil {
+		t.Fatalf("SignHTTP: %v", err)
+	}
+
+	signed, err := sigv4.Parse(req, sigv4.WithTime(oracleTime))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if _, err := signed.Verify(oracleSecret, "us-east-1", "s3"); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if _, err := io.ReadAll(req.Body); errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+		t.Fatalf("framing fault reported as a payload mismatch: %v", err)
+	}
+}
+
+// TestVerifyLargePayloadFailsConsumersThatStopAtContentLength covers the read idioms that take
+// the declared length as the end of the body and never issue the read that returns EOF. Each
+// one has a contract that drops an error arriving with a full byte count, so the mismatch has
+// to reach them as a short read.
+func TestVerifyLargePayloadFailsConsumersThatStopAtContentLength(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+	rewritten := bytes.Repeat([]byte("b"), len(body))
+
+	tests := []struct {
+		name string
+		wrap func([]byte) io.ReadCloser
+		read func(io.Reader, []byte) (int, error)
+	}{
+		{
+			name: "io.ReadFull",
+			read: func(r io.Reader, buf []byte) (int, error) { return io.ReadFull(r, buf) },
+		},
+		{
+			name: "io.ReadAtLeast over a body that ends with (n, io.EOF)",
+			wrap: func(b []byte) io.ReadCloser { return &eofWithData{b: b} },
+			read: func(r io.Reader, buf []byte) (int, error) { return io.ReadAtLeast(r, buf, len(buf)) },
+		},
+		{
+			name: "io.CopyN",
+			read: func(r io.Reader, buf []byte) (int, error) {
+				n, err := io.CopyN(io.Discard, r, int64(len(buf)))
+
+				return int(n), err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("rewritten", func(t *testing.T) {
+				rc := largeSignedBody(t, rewritten, sha256Hex(body), tc.wrap)
+
+				if _, err := tc.read(rc, make([]byte, len(body))); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+					t.Fatalf("read rewritten body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+				}
+			})
+
+			t.Run("intact", func(t *testing.T) {
+				rc := largeSignedBody(t, body, sha256Hex(body), tc.wrap)
+
+				n, err := tc.read(rc, make([]byte, len(body)))
+				if err != nil {
+					t.Fatalf("read intact body: %v", err)
+				}
+				if n != len(body) {
+					t.Fatalf("read %d bytes, want %d", n, len(body))
+				}
+			})
+		})
+	}
+}

@@ -79,19 +79,30 @@ func (req *SignedRequest) bindPayload() error {
 		return nil
 	}
 
-	req.req.Body = &verifiedBody{body: body, digest: digest, hash: sha256.New()}
+	req.req.Body = &verifiedBody{
+		body:      body,
+		digest:    digest,
+		hash:      sha256.New(),
+		remaining: req.req.ContentLength,
+		sized:     req.req.ContentLength >= 0,
+	}
 
 	return nil
 }
 
-// verifiedBody hashes a request body as its consumer reads it and fails the read that reaches
-// EOF unless the body matches the signed digest. Verification can only complete at the end of
-// the stream, so a consumer that stops early has not verified anything.
+// verifiedBody hashes a request body as its consumer reads it and fails the read that
+// completes the body unless it matches the signed digest. The declared length ends the body as
+// surely as EOF does, so a consumer that stops on the last byte is still covered. A body of
+// unknown length is not: only EOF can settle it, and a consumer that stops short verifies
+// nothing.
 type verifiedBody struct {
-	body   io.ReadCloser
-	hash   hash.Hash
-	digest string
-	err    error
+	body      io.ReadCloser
+	hash      hash.Hash
+	digest    string
+	remaining int64 // declared bytes still to come, meaningful only when sized
+	sized     bool
+	verified  bool
+	err       error
 }
 
 func (b *verifiedBody) Read(p []byte) (int, error) {
@@ -102,14 +113,30 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 	n, err := b.body.Read(p)
 	if n > 0 {
 		b.hash.Write(p[:n])
+		b.remaining -= int64(n)
 	}
 
-	if errors.Is(err, io.EOF) && hex.EncodeToString(b.hash.Sum(nil)) != b.digest {
-		// Sticky, so a consumer that keeps reading cannot read past the failure into a
-		// clean EOF and treat the body as complete.
+	// A sized body that ends before its declared length cannot hash to the signed digest, so
+	// it fails the way a rewritten one does. What decides that is the bytes still owed, not
+	// the error: HTTP/2 reports a short body in its own words, not as io.ErrUnexpectedEOF.
+	if b.sized && b.remaining > 0 && err != nil && !errors.Is(err, io.EOF) {
 		b.err = ErrContentSHA256Mismatch
 
-		return n, b.err
+		return 0, b.err
+	}
+
+	if !b.verified && (b.sized && b.remaining <= 0 || errors.Is(err, io.EOF)) {
+		if hex.EncodeToString(b.hash.Sum(nil)) != b.digest {
+			// Sticky, so a consumer that keeps reading cannot read past the failure into a
+			// clean EOF and treat the body as complete. The bytes from this read are withheld
+			// as well: io.ReadFull, io.ReadAtLeast and io.CopyN all discard an error that
+			// arrives alongside a full byte count, so a short read is what reaches them.
+			b.err = ErrContentSHA256Mismatch
+
+			return 0, b.err
+		}
+
+		b.verified = true
 	}
 
 	return n, err
