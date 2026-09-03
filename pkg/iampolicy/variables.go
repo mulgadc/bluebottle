@@ -11,11 +11,12 @@ const VariablePrefix = "${"
 
 // substitutableKeys are the ${key} references the evaluator can resolve:
 // deliberately not supportedConditions, but the keys identifying the caller.
-// KeyUserID is absent because no door supplies it, which would make a pattern
-// naming it unresolvable everywhere rather than only at some doors.
+// Every door supplies every key here for at least one principal type; one that
+// no door supplies would make a pattern naming it fail closed everywhere.
 var substitutableKeys = map[string]bool{
 	KeyUsername:         true,
 	KeyPrincipalAccount: true,
+	KeyUserID:           true,
 }
 
 // SubstitutableKeys returns the keys a ${...} reference may name, sorted, for a

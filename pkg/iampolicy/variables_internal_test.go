@@ -6,10 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// aliceKeys is the condition context of a request from user alice. It carries
-// aws:userid, which no real door supplies, so the cases below pin that the key
-// is unresolvable because it is not substitutable rather than because it is
-// missing from the context.
+// aliceKeys is the condition context of a request from user alice, carrying
+// every key a door supplies for a user. aws:SourceIp is deliberately absent, so
+// a case over it pins that the key is unresolvable because it is not
+// substitutable rather than because it is missing from the context.
 var aliceKeys = ConditionKeys{
 	KeyUsername:         "alice",
 	KeyPrincipalAccount: "000000000001",
@@ -29,6 +29,7 @@ func TestExpandVariables(t *testing.T) {
 		{"username", "arn:aws:s3:::home/${aws:username}/*", aliceKeys, "arn:aws:s3:::home/alice/*", expansionResolved},
 		{"account", "${aws:PrincipalAccount}", aliceKeys, "000000000001", expansionResolved},
 		{"two references", "${aws:username}-${aws:PrincipalAccount}", aliceKeys, "alice-000000000001", expansionResolved},
+		{"userid", "${aws:userid}", aliceKeys, "AIDAALICE", expansionResolved},
 
 		// A door that cannot supply the key makes the pattern unresolvable.
 		{"absent key", "home/${aws:username}/*", ConditionKeys{}, "", expansionUnresolvable},
@@ -36,7 +37,6 @@ func TestExpandVariables(t *testing.T) {
 
 		// Unsupported and malformed references make the pattern unresolvable.
 		{"not substitutable", "home/${aws:SourceIp}/*", aliceKeys, "", expansionUnresolvable},
-		{"userid", "${aws:userid}", aliceKeys, "", expansionUnresolvable},
 		{"unknown key", "home/${nonsense}/*", aliceKeys, "", expansionUnresolvable},
 		{"unterminated", "home/${aws:username", aliceKeys, "", expansionUnresolvable},
 
@@ -49,7 +49,11 @@ func TestExpandVariables(t *testing.T) {
 		{"literal dollar", "${$}{aws:username}", aliceKeys, "${aws:username}", expansionResolved},
 
 		// Single pass: a substituted value carrying "${" is not re-expanded.
-		{"value holds a reference", "${aws:username}", ConditionKeys{KeyUsername: "${aws:userid}"}, "${aws:userid}", expansionResolved},
+		{
+			"value holds a reference", "${aws:username}",
+			ConditionKeys{KeyUsername: "${aws:PrincipalAccount}", KeyPrincipalAccount: "000000000001"},
+			"${aws:PrincipalAccount}", expansionResolved,
+		},
 	}
 
 	for _, tt := range tests {
@@ -103,7 +107,8 @@ func TestUnsupportedVariable(t *testing.T) {
 		{"arn:aws:s3:::home/*", "", false},
 		{"arn:aws:s3:::home/${aws:username}/*", "", false},
 		{"${aws:PrincipalAccount}/${aws:username}", "", false},
-		{"${aws:PrincipalAccount}/${aws:userid}", "aws:userid", true},
+		{"${aws:PrincipalAccount}/${aws:userid}", "", false},
+		{"${aws:PrincipalAccount}/${aws:MultiFactorAuthPresent}", "aws:MultiFactorAuthPresent", true},
 		{"${*}${?}${$}", "", false},
 		{"home/${aws:SourceIp}/*", "aws:SourceIp", true},
 		{"home/${nonsense}/*", "nonsense", true},
@@ -133,7 +138,7 @@ func TestUnresolvableVariable_Fault(t *testing.T) {
 	}{
 		{"arn:aws:s3:::home/${aws:username}/*", "", VariableOK},
 		{"home/${bogus}/*", "bogus", VariableUnknownKey},
-		{"home/${aws:userid}/*", "aws:userid", VariableUnknownKey},
+		{"home/${aws:MultiFactorAuthPresent}/*", "aws:MultiFactorAuthPresent", VariableUnknownKey},
 		{"home/${aws:username", "aws:username", VariableUnterminated},
 		{"${}", "", VariableUnknownKey},
 
@@ -158,11 +163,11 @@ func TestUnresolvableVariable_Fault(t *testing.T) {
 // SubstitutableKeys is read across a module boundary and its result is rewritten
 // in place there, so a cached or shared slice would corrupt the next caller.
 func TestSubstitutableKeys_AreSortedAndCallerOwned(t *testing.T) {
-	assert.Equal(t, []string{KeyPrincipalAccount, KeyUsername}, SubstitutableKeys())
+	assert.Equal(t, []string{KeyPrincipalAccount, KeyUserID, KeyUsername}, SubstitutableKeys())
 
 	first := SubstitutableKeys()
 	first[0] = "clobbered"
-	assert.Equal(t, []string{KeyPrincipalAccount, KeyUsername}, SubstitutableKeys(),
+	assert.Equal(t, []string{KeyPrincipalAccount, KeyUserID, KeyUsername}, SubstitutableKeys(),
 		"SubstitutableKeys handed out a slice a caller can mutate under the next caller")
 }
 
