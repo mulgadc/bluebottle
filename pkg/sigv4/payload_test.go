@@ -130,3 +130,137 @@ func TestVerifyStreamsLargePayload(t *testing.T) {
 		})
 	}
 }
+
+// largeSignedBody signs a body over MaxPayloadLen under digest, runs the signature check, and
+// returns the streaming body a handler would be given. wrap replaces what the wrapper reads
+// from, so a test can choose how the transport frames its reads.
+func largeSignedBody(tb testing.TB, sent []byte, digest string, wrap func([]byte) io.ReadCloser) io.ReadCloser {
+	tb.Helper()
+
+	req := signS3(tb, sent, digest)
+	if wrap != nil {
+		req.Body = wrap(sent)
+	}
+
+	signed, err := sigv4.Parse(req, sigv4.WithTime(oracleTime))
+	if err != nil {
+		tb.Fatalf("Parse: %v", err)
+	}
+
+	if _, err := signed.Verify(oracleSecret, "us-east-1", "s3"); err != nil {
+		tb.Fatalf("Verify: %v", err)
+	}
+
+	return req.Body
+}
+
+// eofWithData returns the last of its bytes and io.EOF from the same Read. io.ReadAtLeast is
+// free to discard an error paired with a full byte count, so a wrapper that reports the
+// mismatch that way alone reports it to nobody.
+type eofWithData struct{ b []byte }
+
+func (r *eofWithData) Read(p []byte) (int, error) {
+	n := copy(p, r.b)
+	r.b = r.b[n:]
+
+	if len(r.b) == 0 {
+		return n, io.EOF
+	}
+
+	return n, nil
+}
+
+func (r *eofWithData) Close() error { return nil }
+
+// TestVerifyLargePayloadFailsConsumersThatStopAtContentLength covers the read idioms that take
+// the declared length as the end of the body and never issue the read that returns EOF. Each
+// one has a contract that drops an error arriving with a full byte count, so the mismatch has
+// to reach them as a short read.
+func TestVerifyLargePayloadFailsConsumersThatStopAtContentLength(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+	rewritten := bytes.Repeat([]byte("b"), len(body))
+
+	tests := []struct {
+		name string
+		wrap func([]byte) io.ReadCloser
+		read func(io.Reader, []byte) (int, error)
+	}{
+		{
+			name: "io.ReadFull",
+			read: func(r io.Reader, buf []byte) (int, error) { return io.ReadFull(r, buf) },
+		},
+		{
+			name: "io.ReadAtLeast over a body that ends with (n, io.EOF)",
+			wrap: func(b []byte) io.ReadCloser { return &eofWithData{b: b} },
+			read: func(r io.Reader, buf []byte) (int, error) { return io.ReadAtLeast(r, buf, len(buf)) },
+		},
+		{
+			name: "io.CopyN",
+			read: func(r io.Reader, buf []byte) (int, error) {
+				n, err := io.CopyN(io.Discard, r, int64(len(buf)))
+
+				return int(n), err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("rewritten", func(t *testing.T) {
+				rc := largeSignedBody(t, rewritten, sha256Hex(body), tc.wrap)
+
+				if _, err := tc.read(rc, make([]byte, len(body))); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+					t.Fatalf("read rewritten body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+				}
+			})
+
+			t.Run("intact", func(t *testing.T) {
+				rc := largeSignedBody(t, body, sha256Hex(body), tc.wrap)
+
+				n, err := tc.read(rc, make([]byte, len(body)))
+				if err != nil {
+					t.Fatalf("read intact body: %v", err)
+				}
+				if n != len(body) {
+					t.Fatalf("read %d bytes, want %d", n, len(body))
+				}
+
+				// The consumer stopped at the declared length, so Close is where a body that
+				// was never compared would still be reported.
+				if err := rc.Close(); err != nil {
+					t.Fatalf("Close after a complete read: %v", err)
+				}
+			})
+		})
+	}
+}
+
+// TestVerifyLargePayloadCloseReportsUnverifiedBody covers the consumer that abandons the body
+// part way. Nothing was compared, so closing it cannot pass for having verified it.
+func TestVerifyLargePayloadCloseReportsUnverifiedBody(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+
+	tests := []struct {
+		name string
+		read int
+	}{
+		{name: "never read"},
+		{name: "read part way", read: 32},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := largeSignedBody(t, body, sha256Hex(body), nil)
+
+			if tc.read > 0 {
+				if _, err := io.ReadFull(rc, make([]byte, tc.read)); err != nil {
+					t.Fatalf("partial read: %v", err)
+				}
+			}
+
+			if err := rc.Close(); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+				t.Fatalf("Close: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+			}
+		})
+	}
+}
