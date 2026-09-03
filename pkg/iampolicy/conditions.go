@@ -27,9 +27,9 @@ const (
 
 // aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
 // the stack, so the key could never be true and accepting it would mint a grant
-// that silently never fires. KeyUserID is absent for the same reason: no door
-// supplies it, so neither a condition on it nor a ${aws:userid} reference could
-// ever resolve, and substitutableKeys leaves it out too.
+// that silently never fires. KeyUserID is absent for a different reason: no
+// operator over it is implemented, so it is substitutable as a ${...} reference
+// but not yet usable in a condition.
 var supportedConditions = map[string]map[string]bool{
 	KeySourceIP:         {OpIPAddress: true},
 	KeyS3Prefix:         {OpStringEquals: true, OpStringLike: true},

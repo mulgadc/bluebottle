@@ -16,10 +16,14 @@ import (
 const (
 	doorAccount  = "111122223333"
 	doorUser     = "alice"
+	doorUserID   = "AIDAALICE"
 	gatewayIP    = "10.1.2.3"
 	s3GateIP     = "192.0.2.10"
 	testResource = "arn:aws:s3:::reports"
 	testAction   = "s3:ListBucket"
+	// A role session's aws:userid is the role's ID and the session name, both
+	// minted by STS: unlike aws:username it is not caller-chosen.
+	doorSessionID = "AROASHAREDOPS:session"
 )
 
 type door struct {
@@ -31,19 +35,23 @@ var doors = []door{
 	{"aws-gateway/user", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
 		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
 	}},
 	// A role session has no aws:username at either door: the session name is
-	// caller-chosen, so it cannot carry an authorization decision.
+	// caller-chosen, so it cannot carry an authorization decision. aws:userid is
+	// supplied, because STS mints it from the resolved role.
 	{"aws-gateway/assumed-role", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
 	}},
 	{"s3-gate/user-listing", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
 		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 		iampolicy.KeyS3Prefix:         "home/",
@@ -51,17 +59,20 @@ var doors = []door{
 	{"s3-gate/user-object", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
 		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 	}},
 	{"s3-gate/role-session", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 	}},
 	{"s3-gate/user-object-plaintext", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "false",
 		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 	}},
@@ -158,19 +169,44 @@ func doorCases() []doorCase {
 			}),
 		},
 		{
-			// aws:userid is not substitutable, because no door supplies it, so
-			// every pattern naming it fails closed at every door.
+			// Every door supplies aws:userid, so the pattern resolves everywhere
+			// and the doors differ on the value rather than on its presence: a
+			// role session's ID is not the user's, so it is inert, not fail-closed.
 			name:     "aws:userid as a resource variable",
-			resource: testResource + "/AIDAALICE/q.csv",
+			resource: testResource + "/" + doorUserID + "/q.csv",
 			stmt:     iampolicy.Statement{Resource: iampolicy.StringOrArr{testResource + "/${aws:userid}/*"}},
-			want:     everywhere(failsClosed, nil),
+			want: everywhere(grants, map[string]outcome{
+				"aws-gateway/assumed-role": inert,
+				"s3-gate/role-session":     inert,
+			}),
+		},
+		{
+			// The same pattern against the session's own ID takes the other side.
+			name:     "aws:userid as a resource variable, role session",
+			resource: testResource + "/" + doorSessionID + "/q.csv",
+			stmt:     iampolicy.Statement{Resource: iampolicy.StringOrArr{testResource + "/${aws:userid}/*"}},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
 		},
 		{
 			// The condition-value path fails closed the same way the resource
-			// path does.
+			// path does. The key is one no door can ever supply, so the row holds
+			// whichever keys the doors gain.
 			name: "unresolvable variable in a condition value",
 			stmt: iampolicy.Statement{
-				Condition: cond(iampolicy.OpStringEquals, iampolicy.KeyPrincipalAccount, "${aws:userid}"),
+				Condition: cond(iampolicy.OpStringEquals, iampolicy.KeyPrincipalAccount,
+					"${aws:MultiFactorAuthPresent}"),
+			},
+			want: everywhere(failsClosed, nil),
+		},
+		{
+			// The resource half of the same witness.
+			name:     "unresolvable variable in a resource",
+			resource: testResource + "/q.csv",
+			stmt: iampolicy.Statement{
+				Resource: iampolicy.StringOrArr{testResource + "/${aws:MultiFactorAuthPresent}/*"},
 			},
 			want: everywhere(failsClosed, nil),
 		},
