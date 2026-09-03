@@ -172,35 +172,90 @@ func (r *eofWithData) Read(p []byte) (int, error) {
 
 func (r *eofWithData) Close() error { return nil }
 
-// truncatedBody returns half its bytes and then io.ErrUnexpectedEOF, which is what net/http
-// gives a reader when a body ends before its declared Content-Length.
-type truncatedBody struct{ b []byte }
+// shortBody hands over its bytes and then fails, standing in for a transport that ends a body
+// before the length the request declared.
+type shortBody struct {
+	b   []byte
+	err error
+}
 
-func (r *truncatedBody) Read(p []byte) (int, error) {
+func (r *shortBody) Read(p []byte) (int, error) {
 	if len(r.b) == 0 {
-		return 0, io.ErrUnexpectedEOF
+		return 0, r.err
 	}
 
-	n := copy(p, r.b[:len(r.b)/2+1])
+	n := copy(p, r.b)
 	r.b = r.b[n:]
 
 	return n, nil
 }
 
-func (r *truncatedBody) Close() error { return nil }
+func (r *shortBody) Close() error { return nil }
 
 // TestVerifyLargePayloadRejectsTruncatedBody covers a streamed body that ends before its
 // declared length. It can no more hash to the signed digest than a rewritten one can, so it
-// has to fail as a mismatch rather than as the read error that would answer 500.
+// has to fail as a mismatch rather than as the read error that would answer 500. Each
+// protocol says so in its own words, and the bytes still owed are what decide it.
 func TestVerifyLargePayloadRejectsTruncatedBody(t *testing.T) {
 	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
 
-	rc := largeSignedBody(t, body, sha256Hex(body), func(b []byte) io.ReadCloser {
-		return &truncatedBody{b: b}
-	})
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "http/1.1", err: io.ErrUnexpectedEOF},
+		{
+			name: "http/2",
+			err:  errors.New("request declared a Content-Length of 10485761 but only wrote 5242880 bytes"),
+		},
+	}
 
-	if _, err := io.ReadAll(rc); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
-		t.Fatalf("read truncated body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := largeSignedBody(t, body, sha256Hex(body), func(b []byte) io.ReadCloser {
+				return &shortBody{b: b[:len(b)/2], err: tc.err}
+			})
+
+			if _, err := io.ReadAll(rc); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+				t.Fatalf("read truncated body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+			}
+		})
+	}
+}
+
+// TestVerifyUnsizedBodyDoesNotBlameTheSignature covers a body of unknown length whose bytes all
+// arrive and hash correctly, but whose framing is cut before the terminating chunk. Nothing is
+// owed against a length that was never declared, so a framing fault must not be reported as a
+// payload the client signed for and did not send.
+func TestVerifyUnsizedBodyDoesNotBlameTheSignature(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+
+	// Signed with no length at all, the way a chunked-transfer request arrives: the signer
+	// leaves content-length out of the signature, so it cannot be removed afterwards.
+	req, err := http.NewRequest(http.MethodPut, "https://"+oracleHost+"/object.txt", &shortBody{b: body, err: io.ErrUnexpectedEOF})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	req.ContentLength = -1
+	req.Header.Set("X-Amz-Content-Sha256", sha256Hex(body))
+
+	creds := aws.Credentials{AccessKeyID: oracleAKID, SecretAccessKey: oracleSecret}
+	if err := v4.NewSigner().SignHTTP(context.Background(), creds, req, sha256Hex(body), "s3", "us-east-1", oracleTime, s3Opts("s3")...); err != nil {
+		t.Fatalf("SignHTTP: %v", err)
+	}
+
+	signed, err := sigv4.Parse(req, sigv4.WithTime(oracleTime))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if _, err := signed.Verify(oracleSecret, "us-east-1", "s3"); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	if _, err := io.ReadAll(req.Body); errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+		t.Fatalf("framing fault reported as a payload mismatch: %v", err)
 	}
 }
 

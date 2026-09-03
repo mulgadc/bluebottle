@@ -116,10 +116,10 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 		b.remaining -= int64(n)
 	}
 
-	// A body that stops short of its declared length cannot hash to the signed digest, so it
-	// fails the way a rewritten one does rather than as a read error. The buffered branch
-	// above draws the same line.
-	if errors.Is(err, io.ErrUnexpectedEOF) {
+	// A sized body that ends before its declared length cannot hash to the signed digest, so
+	// it fails the way a rewritten one does. What decides that is the bytes still owed, not
+	// the error: HTTP/2 reports a short body in its own words, not as io.ErrUnexpectedEOF.
+	if b.sized && b.remaining > 0 && err != nil && !errors.Is(err, io.EOF) {
 		b.err = ErrContentSHA256Mismatch
 
 		return 0, b.err
