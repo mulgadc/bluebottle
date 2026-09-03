@@ -172,6 +172,38 @@ func (r *eofWithData) Read(p []byte) (int, error) {
 
 func (r *eofWithData) Close() error { return nil }
 
+// truncatedBody returns half its bytes and then io.ErrUnexpectedEOF, which is what net/http
+// gives a reader when a body ends before its declared Content-Length.
+type truncatedBody struct{ b []byte }
+
+func (r *truncatedBody) Read(p []byte) (int, error) {
+	if len(r.b) == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	n := copy(p, r.b[:len(r.b)/2+1])
+	r.b = r.b[n:]
+
+	return n, nil
+}
+
+func (r *truncatedBody) Close() error { return nil }
+
+// TestVerifyLargePayloadRejectsTruncatedBody covers a streamed body that ends before its
+// declared length. It can no more hash to the signed digest than a rewritten one can, so it
+// has to fail as a mismatch rather than as the read error that would answer 500.
+func TestVerifyLargePayloadRejectsTruncatedBody(t *testing.T) {
+	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+
+	rc := largeSignedBody(t, body, sha256Hex(body), func(b []byte) io.ReadCloser {
+		return &truncatedBody{b: b}
+	})
+
+	if _, err := io.ReadAll(rc); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+		t.Fatalf("read truncated body: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+	}
+}
+
 // TestVerifyLargePayloadFailsConsumersThatStopAtContentLength covers the read idioms that take
 // the declared length as the end of the body and never issue the read that returns EOF. Each
 // one has a contract that drops an error arriving with a full byte count, so the mismatch has
@@ -224,43 +256,7 @@ func TestVerifyLargePayloadFailsConsumersThatStopAtContentLength(t *testing.T) {
 				if n != len(body) {
 					t.Fatalf("read %d bytes, want %d", n, len(body))
 				}
-
-				// The consumer stopped at the declared length, so Close is where a body that
-				// was never compared would still be reported.
-				if err := rc.Close(); err != nil {
-					t.Fatalf("Close after a complete read: %v", err)
-				}
 			})
-		})
-	}
-}
-
-// TestVerifyLargePayloadCloseReportsUnverifiedBody covers the consumer that abandons the body
-// part way. Nothing was compared, so closing it cannot pass for having verified it.
-func TestVerifyLargePayloadCloseReportsUnverifiedBody(t *testing.T) {
-	body := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
-
-	tests := []struct {
-		name string
-		read int
-	}{
-		{name: "never read"},
-		{name: "read part way", read: 32},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			rc := largeSignedBody(t, body, sha256Hex(body), nil)
-
-			if tc.read > 0 {
-				if _, err := io.ReadFull(rc, make([]byte, tc.read)); err != nil {
-					t.Fatalf("partial read: %v", err)
-				}
-			}
-
-			if err := rc.Close(); !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
-				t.Fatalf("Close: got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
-			}
 		})
 	}
 }

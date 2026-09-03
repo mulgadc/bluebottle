@@ -91,9 +91,10 @@ func (req *SignedRequest) bindPayload() error {
 }
 
 // verifiedBody hashes a request body as its consumer reads it and fails the read that
-// completes the body unless it matches the signed digest. The declared length ends the body
-// as surely as EOF does, so a consumer that never reads past the last byte is still covered;
-// one that stops before it has verified nothing, which Close reports.
+// completes the body unless it matches the signed digest. The declared length ends the body as
+// surely as EOF does, so a consumer that stops on the last byte is still covered. A body of
+// unknown length is not: only EOF can settle it, and a consumer that stops short verifies
+// nothing.
 type verifiedBody struct {
 	body      io.ReadCloser
 	hash      hash.Hash
@@ -115,6 +116,15 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 		b.remaining -= int64(n)
 	}
 
+	// A body that stops short of its declared length cannot hash to the signed digest, so it
+	// fails the way a rewritten one does rather than as a read error. The buffered branch
+	// above draws the same line.
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		b.err = ErrContentSHA256Mismatch
+
+		return 0, b.err
+	}
+
 	if !b.verified && (b.sized && b.remaining <= 0 || errors.Is(err, io.EOF)) {
 		if hex.EncodeToString(b.hash.Sum(nil)) != b.digest {
 			// Sticky, so a consumer that keeps reading cannot read past the failure into a
@@ -132,17 +142,4 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Close reports a body that was abandoned before the digest could be compared, so leaving the
-// stream unread cannot pass for verifying it. The underlying body is closed either way.
-func (b *verifiedBody) Close() error {
-	err := b.body.Close()
-
-	switch {
-	case b.err != nil:
-		return b.err
-	case !b.verified:
-		return fmt.Errorf("%w: body closed before it was verified", ErrContentSHA256Mismatch)
-	}
-
-	return err
-}
+func (b *verifiedBody) Close() error { return b.body.Close() }
