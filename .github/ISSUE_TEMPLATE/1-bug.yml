@@ -1,0 +1,56 @@
+name: Bug report
+description: Something is not working as it should.
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - pkg/auth (ARNs)
+        - pkg/iampolicy
+        - pkg/masterkey
+        - pkg/sigv4
+        - pkg/tlsconfig
+        - pkg/otelsetup
+        - pkg/ratelimit
+        - pkg/safecast
+        - pkg/fipsboot
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Bluebottle version
+      description: The version in your `go.mod` require line, or the commit SHA you are on.
+      placeholder: v1.0.0, or commit abc1234
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, what you expected instead, and how to reproduce it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and output
+      description: Relevant log lines, error messages or command output.
+      render: shell
+
+  - type: textarea
+    id: platform
+    attributes:
+      label: Platform
+      description: Where you are running it, and the Go toolchain you built with.
+      placeholder: |
+        OS: Debian 13
+        Arch: amd64
+        Go: 1.27.0
