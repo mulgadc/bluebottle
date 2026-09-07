@@ -2,25 +2,6 @@ name: Feature request
 description: Suggest something new.
 labels: ["enhancement"]
 body:
-  - type: dropdown
-    id: component
-    attributes:
-      label: Component
-      options:
-        - pkg/auth (ARNs)
-        - pkg/iampolicy
-        - pkg/masterkey
-        - pkg/sigv4
-        - pkg/tlsconfig
-        - pkg/otelsetup
-        - pkg/ratelimit
-        - pkg/safecast
-        - pkg/fipsboot
-        - Documentation
-        - Other / not sure
-    validations:
-      required: true
-
   - type: textarea
     id: proposal
     attributes:
