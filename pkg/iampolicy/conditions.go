@@ -27,15 +27,17 @@ const (
 
 // aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
 // the stack, so the key could never be true and accepting it would mint a grant
-// that silently never fires. KeyUserID is absent for a different reason: no
-// operator over it is implemented, so it is substitutable as a ${...} reference
-// but not yet usable in a condition.
+// that silently never fires.
 var supportedConditions = map[string]map[string]bool{
 	KeySourceIP:         {OpIPAddress: true},
 	KeyS3Prefix:         {OpStringEquals: true, OpStringLike: true},
 	KeySecureTransport:  {OpBool: true},
 	KeyUsername:         {OpStringEquals: true},
 	KeyPrincipalAccount: {OpStringEquals: true},
+	// Unlike aws:username this is safe for every principal type: neither a
+	// user's unique ID nor the role ID and session name STS mints is
+	// caller-chosen, so a role session cannot satisfy it at will.
+	KeyUserID: {OpStringEquals: true, OpStringLike: true},
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.

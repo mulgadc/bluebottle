@@ -86,6 +86,8 @@ func TestSupportedCondition(t *testing.T) {
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpBool, iampolicy.KeySecureTransport))
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyUsername))
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyPrincipalAccount))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyUserID))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringLike, iampolicy.KeyUserID))
 
 	// Right key, wrong operator.
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeySourceIP))
@@ -141,6 +143,16 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "Alice"}, iampolicy.Deny},
 		{"StringEquals account", iampolicy.OpStringEquals, iampolicy.KeyPrincipalAccount,
 			[]string{"123456789012"}, iampolicy.ConditionKeys{iampolicy.KeyPrincipalAccount: "123456789012"}, iampolicy.Allow},
+		{"StringEquals user ID", iampolicy.OpStringEquals, iampolicy.KeyUserID,
+			[]string{"AIDAALICE"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AIDAALICE"}, iampolicy.Allow},
+		{"StringEquals user ID mismatch", iampolicy.OpStringEquals, iampolicy.KeyUserID,
+			[]string{"AIDAALICE"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AIDABOB"}, iampolicy.Deny},
+		// A session's ID is the role ID and the session name, so a wildcard on
+		// the second half pins every session of one role and no other role.
+		{"StringLike any session of one role", iampolicy.OpStringLike, iampolicy.KeyUserID,
+			[]string{"AROASHAREDOPS:*"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AROASHAREDOPS:deploy"}, iampolicy.Allow},
+		{"StringLike does not span roles", iampolicy.OpStringLike, iampolicy.KeyUserID,
+			[]string{"AROASHAREDOPS:*"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AROAOTHER:deploy"}, iampolicy.Deny},
 
 		{"StringLike wildcard match", iampolicy.OpStringLike, iampolicy.KeyS3Prefix,
 			[]string{"home/alice/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/docs/"}, iampolicy.Allow},
