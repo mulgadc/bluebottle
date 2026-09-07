@@ -104,18 +104,21 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 			}
 		}
 	case OpIPAddress:
-		return ipInAny(actual, values)
+		return ipInAny(actual, values, failClosed)
 	}
 	return false
 }
 
 // ipInAny reports whether actual falls inside any CIDR block or equals any bare
-// address in values. An unparseable address matches nothing, and an unparseable
-// policy value warns: write paths reject those, so one here predates the fix.
-func ipInAny(actual string, values []string) bool {
+// address in values. An unparseable request address takes failClosed, as every
+// other operator does with input it cannot resolve, and warns either way.
+func ipInAny(actual string, values []string, failClosed bool) bool {
 	addr, err := netip.ParseAddr(actual)
 	if err != nil {
-		return false
+		// A door passing host:port rather than a bare host is the likely cause.
+		slog.Warn("iampolicy: request address is not an address, so the condition cannot compare",
+			"address", actual, "key", KeySourceIP, "matches", failClosed)
+		return failClosed
 	}
 	addr = addr.Unmap()
 	for _, v := range values {

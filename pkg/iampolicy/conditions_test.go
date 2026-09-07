@@ -225,6 +225,25 @@ func TestEvaluateWithKeys_ConditionalDenyRespectsKeys(t *testing.T) {
 		policies, iampolicy.ConditionKeys{iampolicy.KeySecureTransport: "false"}))
 }
 
+// A request address the operator cannot parse is unresolvable input, so it
+// takes the same arm as every other operator: the Deny fires rather than
+// silently disappearing. host:port is the shape a door is most likely to pass.
+func TestEvaluateWithKeys_UnparseableSourceIPStillDenies(t *testing.T) {
+	allow := doc("Allow", "s3:*", "*")
+	deny := condDoc(iampolicy.OpIPAddress, iampolicy.KeySourceIP, "10.0.0.0/8")
+	deny.Statement[0].Effect = iampolicy.EffectDeny
+	policies := []iampolicy.PolicyDocument{allow, deny}
+
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+		policies, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "10.4.1.9:54321"}),
+		"a Deny conditioned on aws:SourceIp must survive an address it cannot parse")
+
+	// The mirror: the same unparseable address must not satisfy an Allow.
+	conditioned := condDoc(iampolicy.OpIPAddress, iampolicy.KeySourceIP, "10.0.0.0/8")
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+		[]iampolicy.PolicyDocument{conditioned}, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "10.4.1.9:54321"}))
+}
+
 // A condition value may carry a variable, resolved against the same context
 // the key itself is read from.
 func TestEvaluateWithKeys_ConditionValueResolvesVariables(t *testing.T) {
