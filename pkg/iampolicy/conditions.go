@@ -15,6 +15,18 @@ const (
 	KeyUsername         = "aws:username"
 	KeyPrincipalAccount = "aws:PrincipalAccount"
 	KeyUserID           = "aws:userid"
+	KeyPrincipalType    = "aws:PrincipalType"
+)
+
+// Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
+// Both doors map their internal principal-type strings through these so a
+// policy sees one spelling regardless of which door resolved it.
+const (
+	PrincipalTypeUser          = "User"
+	PrincipalTypeAssumedRole   = "AssumedRole"
+	PrincipalTypeAccount       = "Account"
+	PrincipalTypeFederatedUser = "FederatedUser"
+	PrincipalTypeAnonymous     = "Anonymous"
 )
 
 // Condition operators understood by the evaluator.
@@ -38,6 +50,10 @@ var supportedConditions = map[string]map[string]bool{
 	// user's unique ID nor the role ID and session name STS mints is
 	// caller-chosen, so a role session cannot satisfy it at will.
 	KeyUserID: {OpStringEquals: true, OpStringLike: true},
+	// Not caller-chosen: both doors resolve it from the credential record, not
+	// from anything the request carries, so it clears the bar aws:username
+	// fails for role sessions.
+	KeyPrincipalType: {OpStringEquals: true, OpStringLike: true},
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.

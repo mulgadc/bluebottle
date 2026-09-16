@@ -38,6 +38,7 @@ var doors = []door{
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 	}},
 	// A role session has no aws:username at either door: the session name is
 	// caller-chosen, so it cannot carry an authorization decision. aws:userid is
@@ -47,6 +48,7 @@ var doors = []door{
 		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeAssumedRole,
 	}},
 	{"s3-gate/user-listing", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
@@ -55,6 +57,7 @@ var doors = []door{
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 		iampolicy.KeyS3Prefix:         "home/",
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 	}},
 	{"s3-gate/user-object", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
@@ -62,12 +65,14 @@ var doors = []door{
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 	}},
 	{"s3-gate/role-session", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
 		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeAssumedRole,
 	}},
 	{"s3-gate/user-object-plaintext", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "false",
@@ -75,6 +80,7 @@ var doors = []door{
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 	}},
 }
 
@@ -227,6 +233,25 @@ func doorCases() []doorCase {
 			name: "aws:PrincipalAccount",
 			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals, iampolicy.KeyPrincipalAccount, doorAccount)},
 			want: everywhere(grants, nil),
+		},
+		{
+			// Unlike aws:username, both doors supply aws:PrincipalType for every
+			// principal type, so a role session is inert rather than absent: the
+			// door answered "AssumedRole", which does not equal "User".
+			name: "aws:PrincipalType StringEquals User",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals, iampolicy.KeyPrincipalType, iampolicy.PrincipalTypeUser)},
+			want: everywhere(grants, map[string]outcome{
+				"aws-gateway/assumed-role": inert,
+				"s3-gate/role-session":     inert,
+			}),
+		},
+		{
+			name: "aws:PrincipalType StringLike AssumedRole",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringLike, iampolicy.KeyPrincipalType, "Assumed*")},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
 		},
 		{
 			// A key no door can ever supply is unenforceable, not merely absent,
