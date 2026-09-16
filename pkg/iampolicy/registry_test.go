@@ -18,6 +18,7 @@ var allConditionKeys = []string{
 	iampolicy.KeyUsername,
 	iampolicy.KeyPrincipalAccount,
 	iampolicy.KeyUserID,
+	iampolicy.KeyPrincipalType,
 }
 
 // Every operator the package names. conditions_internal_test.go pins that the
