@@ -264,7 +264,7 @@ func resolveContentHash(req *http.Request, presigned bool, service string) (stri
 	// Cap the read so an oversized body can't exhaust memory before authentication.
 	buf, err := io.ReadAll(io.LimitReader(req.Body, MaxPayloadLen+1))
 	if err != nil {
-		return "", "", fmt.Errorf("reading request body to hash payload: %w", err)
+		return "", "", fmt.Errorf("%w: %w", ErrReadingBody, err)
 	}
 
 	if int64(len(buf)) > MaxPayloadLen {

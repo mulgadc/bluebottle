@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -313,5 +315,30 @@ func TestVerifyLargePayloadFailsConsumersThatStopAtContentLength(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// TestParseSurfacesBodyReadFailure pins that a body the server cannot read is reported as
+// ErrReadingBody wrapping the transport error, so callers can tell it from a bad signature.
+func TestParseSurfacesBodyReadFailure(t *testing.T) {
+	readErr := errors.New("connection reset by peer")
+
+	req, err := http.NewRequest(http.MethodPost, "https://sts.example.com/", io.MultiReader(strings.NewReader("Action="), iotest.ErrReader(readErr)))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	creds := aws.Credentials{AccessKeyID: oracleAKID, SecretAccessKey: oracleSecret}
+	if err := v4.NewSigner().SignHTTP(context.Background(), creds, req, sigv4.EmptyPayload, "sts", "us-east-1", oracleTime); err != nil {
+		t.Fatalf("SignHTTP: %v", err)
+	}
+
+	_, err = sigv4.Parse(req, sigv4.WithTime(oracleTime))
+	if !errors.Is(err, sigv4.ErrReadingBody) {
+		t.Fatalf("Parse error = %v, want ErrReadingBody", err)
+	}
+
+	if !errors.Is(err, readErr) {
+		t.Fatalf("Parse error = %v, want it to wrap the read error", err)
 	}
 }

@@ -104,6 +104,10 @@ var (
 	// Parse will buffer to derive the signed content hash.
 	ErrPayloadTooLarge = errors.New("request payload exceeds maximum size for hashing")
 
+	// ErrReadingBody is returned when Parse cannot read a non-S3 request's body to hash
+	// it. It is a transport failure, not an authentication one; the read error is wrapped.
+	ErrReadingBody = errors.New("reading request body to hash payload")
+
 	// ErrUnsignedHeader is returned when a header that must be signed (host,
 	// Content-MD5, or an x-amz-* header) is absent from SignedHeaders.
 	ErrUnsignedHeader = errors.New("required header is not signed")
