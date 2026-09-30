@@ -7,7 +7,7 @@ import (
 )
 
 // Condition context keys understood by the evaluator. Only the S3 data plane
-// supplies KeyS3Prefix.
+// supplies KeyS3Prefix, and only an iam:PassRole check supplies KeyPassedToService.
 const (
 	KeySourceIP         = "aws:SourceIp"
 	KeyS3Prefix         = "s3:prefix"
@@ -16,6 +16,7 @@ const (
 	KeyPrincipalAccount = "aws:PrincipalAccount"
 	KeyUserID           = "aws:userid"
 	KeyPrincipalType    = "aws:PrincipalType"
+	KeyPassedToService  = "iam:PassedToService"
 )
 
 // Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
@@ -54,6 +55,9 @@ var supportedConditions = map[string]map[string]bool{
 	// from anything the request carries, so it clears the bar aws:username
 	// fails for role sessions.
 	KeyPrincipalType: {OpStringEquals: true, OpStringLike: true},
+	// Fixed by the service performing the PassRole check, never read from the
+	// request, and absent on every other action.
+	KeyPassedToService: {OpStringEquals: true, OpStringLike: true},
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.

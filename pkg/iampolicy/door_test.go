@@ -24,6 +24,8 @@ const (
 	// A role session's aws:userid is the role's ID and the session name, both
 	// minted by STS: unlike aws:username it is not caller-chosen.
 	doorSessionID = "AROASHAREDOPS:session"
+	// The service an iam:PassRole check hands the role to.
+	doorPassedTo = "ec2.amazonaws.com"
 )
 
 type door struct {
@@ -49,6 +51,17 @@ var doors = []door{
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
 		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeAssumedRole,
+	}},
+	// An iam:PassRole check at the gateway carries the request's keys plus the
+	// consuming service. No other action at either door supplies it.
+	{"aws-gateway/passrole", iampolicy.ConditionKeys{
+		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
+		iampolicy.KeyPrincipalAccount: doorAccount,
+		iampolicy.KeySourceIP:         gatewayIP,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
+		iampolicy.KeyPassedToService:  doorPassedTo,
 	}},
 	{"s3-gate/user-listing", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
@@ -227,6 +240,7 @@ func doorCases() []doorCase {
 			want: everywhere(inert, map[string]outcome{
 				"aws-gateway/user":         grants,
 				"aws-gateway/assumed-role": grants,
+				"aws-gateway/passrole":     grants,
 			}),
 		},
 		{
@@ -252,6 +266,17 @@ func doorCases() []doorCase {
 				"aws-gateway/assumed-role": grants,
 				"s3-gate/role-session":     grants,
 			}),
+		},
+		{
+			name: "iam:PassedToService StringEquals the consuming service",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals, iampolicy.KeyPassedToService, doorPassedTo)},
+			want: everywhere(inert, map[string]outcome{"aws-gateway/passrole": grants}),
+		},
+		{
+			// A role passed to EC2 does not satisfy a grant scoped to ECS.
+			name: "iam:PassedToService StringLike another service",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringLike, iampolicy.KeyPassedToService, "ecs-*")},
+			want: everywhere(inert, nil),
 		},
 		{
 			// A key no door can ever supply is unenforceable, not merely absent,
