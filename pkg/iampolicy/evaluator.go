@@ -79,26 +79,55 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
 		}
 
 		// Deny, and unrecognized effects, fall through so the caller's Effect
-		// switch still fires. NotAction/NotResource leave the corresponding
-		// positive selector empty, so that half is treated as matching.
-		return (len(s.NotAction) > 0 || matchesAny(s.Action, action, true)) &&
-			(len(s.NotResource) > 0 || matchesAnyResource(s.Resource, resource, keys, failClosed))
+		// switch still fires. A malformed selector pair is treated as matching
+		// on that half, since it cannot be read as a narrower statement.
+		return (!s.wellFormedActions() || s.matchesAction(action)) &&
+			(!s.wellFormedResources() || s.matchesResource(resource, keys, failClosed))
 	}
 
-	return matchesAny(s.Action, action, true) &&
-		matchesAnyResource(s.Resource, resource, keys, failClosed) &&
+	return s.matchesAction(action) &&
+		s.matchesResource(resource, keys, failClosed) &&
 		s.conditionsHold(keys, failClosed)
 }
 
+// matchesAction selects on Action, or on the complement of NotAction.
+func (s *Statement) matchesAction(action string) bool {
+	if len(s.NotAction) > 0 {
+		return !matchesAny(s.NotAction, action, true)
+	}
+	return matchesAny(s.Action, action, true)
+}
+
+// matchesResource selects on Resource, or on the complement of NotResource. An
+// unresolvable variable in NotResource takes the inverted fail-closed value, so
+// after the complement it still only narrows access.
+func (s *Statement) matchesResource(resource string, keys ConditionKeys, failClosed bool) bool {
+	if len(s.NotResource) > 0 {
+		return !matchesAnyResource(s.NotResource, resource, keys, !failClosed)
+	}
+	return matchesAnyResource(s.Resource, resource, keys, failClosed)
+}
+
+// wellFormedActions reports whether Action and NotAction are not both set, as
+// AWS requires. A statement with neither selects nothing, so needs no check.
+// wellFormedResources is the same rule for resources.
+func (s *Statement) wellFormedActions() bool {
+	return len(s.Action) == 0 || len(s.NotAction) == 0
+}
+
+func (s *Statement) wellFormedResources() bool {
+	return len(s.Resource) == 0 || len(s.NotResource) == 0
+}
+
 // unenforceable returns the first construct on the statement that this release
-// cannot evaluate, for the fail-closed warning. NotAction, NotResource and
+// cannot evaluate, for the fail-closed warning. A malformed selector pair and
 // Principal report themselves in the operator position; they have no key.
 func (s *Statement) unenforceable() (operator, key string, found bool) {
-	if len(s.NotAction) > 0 {
-		return "NotAction", "", true
+	if !s.wellFormedActions() {
+		return "Action/NotAction", "", true
 	}
-	if len(s.NotResource) > 0 {
-		return "NotResource", "", true
+	if !s.wellFormedResources() {
+		return "Resource/NotResource", "", true
 	}
 	// A JSON null counts as absent, so a document that merely spells the field
 	// out is not forced down the fail-closed path.
