@@ -23,9 +23,9 @@ type PolicyDocument struct {
 	Statement []Statement `json:"Statement"`
 }
 
-// Statement is a single statement within a policy document. NotAction,
-// NotResource and Principal are modelled so they are enforced rather than
-// dropped at parse; Principal has no meaning on an identity policy, so a
+// Statement is a single statement within a policy document. NotAction and
+// NotResource select the complement of their lists. Principal is modelled so it
+// is not dropped at parse; it has no meaning on an identity policy, so a
 // statement carrying one fails closed in the evaluator.
 type Statement struct {
 	Sid       string                               `json:"Sid,omitempty"`

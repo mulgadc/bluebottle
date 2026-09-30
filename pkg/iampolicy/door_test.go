@@ -279,6 +279,37 @@ func doorCases() []doorCase {
 			want: everywhere(inert, nil),
 		},
 		{
+			name: "NotAction excluding another action",
+			stmt: iampolicy.Statement{NotAction: iampolicy.StringOrArr{"s3:DeleteObject"}},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "NotAction excluding the requested action",
+			stmt: iampolicy.Statement{NotAction: iampolicy.StringOrArr{"s3:List*"}},
+			want: everywhere(inert, nil),
+		},
+		{
+			name: "NotResource excluding another resource",
+			stmt: iampolicy.Statement{NotResource: iampolicy.StringOrArr{testResource + "-archive"}},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "NotResource excluding the requested resource",
+			stmt: iampolicy.Statement{NotResource: iampolicy.StringOrArr{testResource}},
+			want: everywhere(inert, nil),
+		},
+		{
+			// The inverse of the resource-variable row: resolved, the exclusion
+			// removes the user's own prefix; unresolved, it fails closed.
+			name:     "aws:username as a NotResource variable",
+			resource: testResource + "/alice/q.csv",
+			stmt:     iampolicy.Statement{NotResource: iampolicy.StringOrArr{testResource + "/${aws:username}/*"}},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": failsClosed,
+				"s3-gate/role-session":     failsClosed,
+			}),
+		},
+		{
 			// A key no door can ever supply is unenforceable, not merely absent,
 			// so it fails closed everywhere.
 			name: "condition on an unsupported key",
@@ -340,10 +371,10 @@ func TestEvaluate_DoorsResolveTheSameDocument(t *testing.T) {
 // only writes the construct under test.
 func effected(s iampolicy.Statement, effect string) iampolicy.Statement {
 	s.Effect = effect
-	if len(s.Action) == 0 {
+	if len(s.Action) == 0 && len(s.NotAction) == 0 {
 		s.Action = iampolicy.StringOrArr{"s3:*"}
 	}
-	if len(s.Resource) == 0 {
+	if len(s.Resource) == 0 && len(s.NotResource) == 0 {
 		s.Resource = iampolicy.StringOrArr{"*"}
 	}
 	return s

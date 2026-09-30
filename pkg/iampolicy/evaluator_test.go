@@ -195,36 +195,95 @@ func TestEvaluate_NotActionAlongsideActionFailsClosed(t *testing.T) {
 		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{d}, nil))
 }
 
-// A Deny whose only selector is NotAction is inert today and denies everything
-// under the fail-closed rule. Pinned so the behaviour change cannot regress.
-func TestEvaluate_NotActionOnlyDenyMatchesEverything(t *testing.T) {
-	allow := doc("Allow", "*", "*")
-	deny := iampolicy.PolicyDocument{
-		Version: "2012-10-17",
-		Statement: []iampolicy.Statement{{
-			Effect:    "Deny",
-			NotAction: iampolicy.StringOrArr{"sts:AssumeRole"},
-			Resource:  iampolicy.StringOrArr{"*"},
-		}},
-	}
+func TestEvaluate_NotResourceAlongsideResourceFailsClosed(t *testing.T) {
+	allow := doc("Allow", "s3:*", "*")
+	allow.Statement[0].NotResource = iampolicy.StringOrArr{"arn:aws:s3:::private/*"}
 	assert.Equal(t, iampolicy.Deny,
-		iampolicy.EvaluateWithKeys("sts:AssumeRole", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", []iampolicy.PolicyDocument{allow}, nil))
+
+	deny := doc("Deny", "s3:*", "arn:aws:s3:::nothing")
+	deny.Statement[0].NotResource = iampolicy.StringOrArr{"arn:aws:s3:::public/*"}
 	assert.Equal(t, iampolicy.Deny,
-		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
+		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a",
+			[]iampolicy.PolicyDocument{doc("Allow", "*", "*"), deny}, nil))
 }
 
-func TestEvaluate_NotResourceOnlyDenyMatchesEverything(t *testing.T) {
-	allow := doc("Allow", "*", "*")
-	deny := iampolicy.PolicyDocument{
-		Version: "2012-10-17",
-		Statement: []iampolicy.Statement{{
-			Effect:      "Deny",
-			Action:      iampolicy.StringOrArr{"s3:*"},
-			NotResource: iampolicy.StringOrArr{"arn:aws:s3:::public/*"},
-		}},
-	}
-	assert.Equal(t, iampolicy.Deny,
-		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", []iampolicy.PolicyDocument{allow, deny}, nil))
+func notActionDoc(effect string, notAction ...string) iampolicy.PolicyDocument {
+	return iampolicy.PolicyDocument{Statement: []iampolicy.Statement{{
+		Effect:    effect,
+		NotAction: notAction,
+		Resource:  iampolicy.StringOrArr{"*"},
+	}}}
+}
+
+func notResourceDoc(effect string, notResource ...string) iampolicy.PolicyDocument {
+	return iampolicy.PolicyDocument{Statement: []iampolicy.Statement{{
+		Effect:      effect,
+		Action:      iampolicy.StringOrArr{"s3:*"},
+		NotResource: notResource,
+	}}}
+}
+
+// The PowerUserAccess shape: everything except IAM.
+func TestEvaluate_AllowNotActionGrantsTheComplement(t *testing.T) {
+	p := []iampolicy.PolicyDocument{notActionDoc("Allow", "iam:*", "organizations:DescribeOrganization")}
+
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("ec2:RunInstances", "*", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("organizations:ListAccounts", "*", p, nil))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("iam:CreateUser", "*", p, nil))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("organizations:DescribeOrganization", "*", p, nil))
+	// Actions match case-insensitively on the excluded side too.
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("IAM:CreateUser", "*", p, nil))
+}
+
+func TestEvaluate_DenyNotActionDeniesTheComplement(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "*", "*"), notActionDoc("Deny", "sts:AssumeRole", "s3:Get*")}
+
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", p, nil))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:PutObject", "*", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("sts:AssumeRole", "*", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "*", p, nil))
+}
+
+func TestEvaluate_AllowNotResourceGrantsTheComplement(t *testing.T) {
+	p := []iampolicy.PolicyDocument{notResourceDoc("Allow", "arn:aws:s3:::secret", "arn:aws:s3:::secret/*")}
+
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", p, nil))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::secret/a", p, nil))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "arn:aws:s3:::secret", p, nil))
+	// Resources match case-sensitively, so a differently-cased ARN is not excluded.
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::SECRET/a", p, nil))
+	// The action selector still applies.
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("ec2:RunInstances", "arn:aws:s3:::public/a", p, nil))
+}
+
+func TestEvaluate_DenyNotResourceDeniesTheComplement(t *testing.T) {
+	p := []iampolicy.PolicyDocument{doc("Allow", "*", "*"), notResourceDoc("Deny", "arn:aws:s3:::public/*")}
+
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::private/a", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("ec2:RunInstances", "arn:aws:s3:::private/a", p, nil))
+}
+
+// A NotResource carrying a variable excludes the principal's own prefix once
+// resolved, and only narrows access when it cannot be.
+func TestEvaluate_NotResourceWithPolicyVariable(t *testing.T) {
+	const own = "arn:aws:s3:::home/alice/a"
+	const other = "arn:aws:s3:::home/bob/a"
+	alice := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}
+	role := iampolicy.ConditionKeys{iampolicy.KeyUserID: "AROAROLE:session"}
+
+	allow := []iampolicy.PolicyDocument{notResourceDoc("Allow", "arn:aws:s3:::home/${aws:username}/*")}
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", other, allow, alice))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", own, allow, alice))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", other, allow, role),
+		"an unresolvable exclusion must not widen an Allow")
+
+	deny := []iampolicy.PolicyDocument{doc("Allow", "*", "*"), notResourceDoc("Deny", "arn:aws:s3:::home/${aws:username}/*")}
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", other, deny, alice))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", own, deny, alice))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", own, deny, role),
+		"an unresolvable exclusion must not narrow a Deny")
 }
 
 // A resource-policy document evaluated as an identity policy must not grant:

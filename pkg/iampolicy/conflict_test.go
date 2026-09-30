@@ -31,6 +31,12 @@ func sourceSlice(at map[string]iampolicy.Statement) []iampolicy.PolicyDocument {
 	return docs
 }
 
+// unenforceableCondition names an operator outside the supported set, so any
+// statement carrying it takes the fail-closed path.
+var unenforceableCondition = map[string]map[string]iampolicy.ConditionValue{
+	"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
+}
+
 func stmt(effect, action, resource string) iampolicy.Statement {
 	return iampolicy.Statement{
 		Effect:   effect,
@@ -129,15 +135,16 @@ func TestEvaluate_UnenforceableAllowDoesNotPoisonAnotherSource(t *testing.T) {
 	docs := sourceSlice(map[string]iampolicy.Statement{
 		"user-managed": {
 			Effect:    "Allow",
-			NotAction: iampolicy.StringOrArr{"ec2:TerminateInstances"},
+			Action:    iampolicy.StringOrArr{"ec2:*"},
 			Resource:  iampolicy.StringOrArr{"*"},
+			Condition: unenforceableCondition,
 		},
 		"group-inline": stmt("Allow", "ec2:RunInstances", "*"),
 	})
 
 	assert.Equal(t, iampolicy.Allow,
 		iampolicy.EvaluateWithKeys("ec2:RunInstances", "*", docs, nil))
-	// The NotAction Allow granted nothing, so the action it would have covered
+	// The unenforceable Allow granted nothing, so the action it would have covered
 	// falls back to the implicit deny.
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", docs, nil))
@@ -149,9 +156,10 @@ func TestEvaluate_UnenforceableDenyOverridesAnotherSource(t *testing.T) {
 	docs := sourceSlice(map[string]iampolicy.Statement{
 		"user-managed": stmt("Allow", "ec2:*", "*"),
 		"role-inline": {
-			Effect:      "Deny",
-			Action:      iampolicy.StringOrArr{"ec2:TerminateInstances"},
-			NotResource: iampolicy.StringOrArr{"arn:aws:ec2:ap-southeast-2:111122223333:instance/i-keep"},
+			Effect:    "Deny",
+			Action:    iampolicy.StringOrArr{"ec2:TerminateInstances"},
+			Resource:  iampolicy.StringOrArr{"*"},
+			Condition: unenforceableCondition,
 		},
 	})
 
