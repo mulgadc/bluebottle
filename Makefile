@@ -61,6 +61,17 @@ govulncheck:
 	$(_Q)go tool govulncheck ./...
 	@echo "  govulncheck ok"
 
+# Run every Fuzz target in the module for FUZZTIME each. Go fuzzes one target
+# per invocation, so targets are discovered and run in turn.
+FUZZTIME ?= 30s
+fuzz:
+	@set -e; for pkg in $$(go list ./...); do \
+		for fz in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz' || true); do \
+			echo -e "\n....Fuzzing $$pkg $$fz for $(FUZZTIME)...."; \
+			go test -run '^$$' -fuzz "^$$fz\$$" -fuzztime $(FUZZTIME) $$pkg; \
+		done; \
+	done
+
 # NilAway — advisory nil-panic analysis. Not in preflight: it has a known
 # false-positive rate, so findings are triaged by hand rather than gating commits.
 nilaway:
@@ -71,4 +82,4 @@ nilaway:
 clean:
 	rm -f $(COVERPROFILE)
 
-.PHONY: preflight test test-cover test-race diff-coverage lint fix govulncheck nilaway clean
+.PHONY: preflight test test-cover test-race diff-coverage lint fix govulncheck fuzz nilaway clean
