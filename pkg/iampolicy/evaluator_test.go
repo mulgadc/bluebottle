@@ -181,9 +181,7 @@ func TestEvaluate_ConditionalAllowDeniedWithoutKeys(t *testing.T) {
 func TestEvaluate_UnenforceableDenyStillDenies(t *testing.T) {
 	allow := doc("Allow", "*", "*")
 	deny := doc("Deny", "ec2:TerminateInstances", "*")
-	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
-		"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
-	}
+	deny.Statement[0].Condition = unenforceableCondition
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("ec2:TerminateInstances", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
 }
@@ -193,6 +191,13 @@ func TestEvaluate_NotActionAlongsideActionFailsClosed(t *testing.T) {
 	d.Statement[0].NotAction = iampolicy.StringOrArr{"s3:DeleteObject"}
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "*", []iampolicy.PolicyDocument{d}, nil))
+
+	// Read as either selector alone, this Deny would spare s3:GetObject.
+	deny := doc("Deny", "ec2:*", "*")
+	deny.Statement[0].NotAction = iampolicy.StringOrArr{"s3:GetObject"}
+	assert.Equal(t, iampolicy.Deny,
+		iampolicy.EvaluateWithKeys("s3:GetObject", "*",
+			[]iampolicy.PolicyDocument{doc("Allow", "*", "*"), deny}, nil))
 }
 
 func TestEvaluate_NotResourceAlongsideResourceFailsClosed(t *testing.T) {
@@ -206,6 +211,22 @@ func TestEvaluate_NotResourceAlongsideResourceFailsClosed(t *testing.T) {
 	assert.Equal(t, iampolicy.Deny,
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a",
 			[]iampolicy.PolicyDocument{doc("Allow", "*", "*"), deny}, nil))
+}
+
+// A well-formed Not selector on a Deny that fails closed for another reason
+// still selects its complement; it must not collapse to selecting nothing.
+func TestEvaluate_UnenforceableDenyKeepsNotSelectors(t *testing.T) {
+	notAction := notActionDoc("Deny", "s3:Get*")
+	notAction.Statement[0].Condition = unenforceableCondition
+	p := []iampolicy.PolicyDocument{doc("Allow", "*", "*"), notAction}
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("ec2:RunInstances", "*", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "*", p, nil))
+
+	notResource := notResourceDoc("Deny", "arn:aws:s3:::public/*")
+	notResource.Statement[0].Condition = unenforceableCondition
+	p = []iampolicy.PolicyDocument{doc("Allow", "*", "*"), notResource}
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::private/a", p, nil))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::public/a", p, nil))
 }
 
 func notActionDoc(effect string, notAction ...string) iampolicy.PolicyDocument {
@@ -329,9 +350,7 @@ func TestEvaluate_PrincipalFromJSONFailsClosed(t *testing.T) {
 func TestEvaluate_UnenforceableDenyStillScopedByAction(t *testing.T) {
 	allow := doc("Allow", "*", "*")
 	deny := doc("Deny", "s3:DeleteObject", "*")
-	deny.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
-		"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
-	}
+	deny.Statement[0].Condition = unenforceableCondition
 	assert.Equal(t, iampolicy.Allow,
 		iampolicy.EvaluateWithKeys("ec2:DescribeInstances", "*", []iampolicy.PolicyDocument{allow, deny}, nil))
 }
