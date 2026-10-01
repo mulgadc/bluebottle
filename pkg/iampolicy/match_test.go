@@ -289,3 +289,26 @@ func TestMatchesAny(t *testing.T) {
 	// Empty pattern set never matches.
 	assert.False(t, matchesAny(nil, "s3:GetObject", true))
 }
+
+func TestSplitARN(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string
+	}{
+		{"arn:aws:iam::111122223333:role/ops", []string{"arn", "aws", "iam", "", "111122223333", "role/ops"}},
+		{"arn:aws:s3:::bucket", []string{"arn", "aws", "s3", "", "", "bucket"}},
+		{"arn:aws:logs:r:1:log-group:a:*", []string{"arn", "aws", "logs", "r", "1", "log-group:a:*"}},
+		{"arn:aws:s3:::home/${aws:userid}/*", []string{"arn", "aws", "s3", "", "", "home/${aws:userid}/*"}},
+		{"arn:aws:iam::${aws:PrincipalAccount}:role/*", []string{"arn", "aws", "iam", "", "${aws:PrincipalAccount}", "role/*"}},
+		{"arn:aws:s3::", nil},
+		{"*", nil},
+		{"arn:aws:${aws:username:a:b:c", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, ok := SplitARN(tt.in)
+			assert.Equal(t, tt.want != nil, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

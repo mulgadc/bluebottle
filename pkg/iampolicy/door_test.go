@@ -279,6 +279,55 @@ func doorCases() []doorCase {
 			want: everywhere(inert, nil),
 		},
 		{
+			// Absent holds under a negated operator, so a role session — which has
+			// no aws:username — satisfies it at both doors, as in AWS.
+			name: "aws:username StringNotEquals another user",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotEquals, iampolicy.KeyUsername, "bob")},
+			want: everywhere(grants, nil),
+		},
+		{
+			// The user doors answer "alice" and the condition rejects it; the
+			// role-session doors omit the key, so it holds there.
+			name: "aws:username StringNotEquals the user",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotEquals, iampolicy.KeyUsername, doorUser)},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
+		},
+		{
+			// Only the listing supplies s3:prefix; every other door omits it.
+			name: "s3:prefix StringNotLike the listing prefix",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix, "home/*")},
+			want: everywhere(grants, map[string]outcome{"s3-gate/user-listing": inert}),
+		},
+		{
+			// The "deny anything not from our network" idiom: the S3 gate's
+			// address is outside the range, so the Deny fires there.
+			name: "aws:SourceIp NotIpAddress",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNotIPAddress, iampolicy.KeySourceIP, "10.0.0.0/8")},
+			want: everywhere(grants, map[string]outcome{
+				"aws-gateway/user":         inert,
+				"aws-gateway/assumed-role": inert,
+				"aws-gateway/passrole":     inert,
+			}),
+		},
+		{
+			name: "aws:PrincipalType StringEqualsIgnoreCase",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyPrincipalType, "assumedrole")},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
+		},
+		{
+			// Every action but PassRole omits the key, so a negated grant on it
+			// reaches them too, as in AWS.
+			name: "iam:PassedToService StringNotEquals the consuming service",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotEquals, iampolicy.KeyPassedToService, doorPassedTo)},
+			want: everywhere(grants, map[string]outcome{"aws-gateway/passrole": inert}),
+		},
+		{
 			name: "NotAction excluding another action",
 			stmt: iampolicy.Statement{NotAction: iampolicy.StringOrArr{"s3:DeleteObject"}},
 			want: everywhere(grants, nil),

@@ -32,32 +32,70 @@ const (
 
 // Condition operators understood by the evaluator.
 const (
-	OpStringEquals = "StringEquals"
-	OpStringLike   = "StringLike"
-	OpIPAddress    = "IpAddress"
-	OpBool         = "Bool"
+	OpStringEquals              = "StringEquals"
+	OpStringNotEquals           = "StringNotEquals"
+	OpStringEqualsIgnoreCase    = "StringEqualsIgnoreCase"
+	OpStringNotEqualsIgnoreCase = "StringNotEqualsIgnoreCase"
+	OpStringLike                = "StringLike"
+	OpStringNotLike             = "StringNotLike"
+	OpIPAddress                 = "IpAddress"
+	OpNotIPAddress              = "NotIpAddress"
+	OpBool                      = "Bool"
+	OpArnEquals                 = "ArnEquals"
+	OpArnLike                   = "ArnLike"
+	OpArnNotEquals              = "ArnNotEquals"
+	OpArnNotLike                = "ArnNotLike"
 )
+
+// negatedOperators maps each negated operator to the positive form it inverts.
+// Per AWS, a negated operator holds on a key absent from the request context.
+var negatedOperators = map[string]string{
+	OpStringNotEquals:           OpStringEquals,
+	OpStringNotEqualsIgnoreCase: OpStringEqualsIgnoreCase,
+	OpStringNotLike:             OpStringLike,
+	OpNotIPAddress:              OpIPAddress,
+	OpArnNotEquals:              OpArnEquals,
+	OpArnNotLike:                OpArnLike,
+}
+
+// Operator sets for the registry below. Each string key carries the negated and
+// case-insensitive forms of the operators it supports. The Arn operators are on
+// no key: none of the supported keys is ARN-valued.
+var (
+	stringEqualsOps = []string{OpStringEquals, OpStringNotEquals, OpStringEqualsIgnoreCase, OpStringNotEqualsIgnoreCase}
+	stringLikeOps   = []string{OpStringLike, OpStringNotLike}
+)
+
+func operators(sets ...[]string) map[string]bool {
+	ops := make(map[string]bool)
+	for _, set := range sets {
+		for _, op := range set {
+			ops[op] = true
+		}
+	}
+	return ops
+}
 
 // aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
 // the stack, so the key could never be true and accepting it would mint a grant
 // that silently never fires.
 var supportedConditions = map[string]map[string]bool{
-	KeySourceIP:         {OpIPAddress: true},
-	KeyS3Prefix:         {OpStringEquals: true, OpStringLike: true},
+	KeySourceIP:         {OpIPAddress: true, OpNotIPAddress: true},
+	KeyS3Prefix:         operators(stringEqualsOps, stringLikeOps),
 	KeySecureTransport:  {OpBool: true},
-	KeyUsername:         {OpStringEquals: true},
-	KeyPrincipalAccount: {OpStringEquals: true},
+	KeyUsername:         operators(stringEqualsOps),
+	KeyPrincipalAccount: operators(stringEqualsOps),
 	// Unlike aws:username this is safe for every principal type: neither a
 	// user's unique ID nor the role ID and session name STS mints is
 	// caller-chosen, so a role session cannot satisfy it at will.
-	KeyUserID: {OpStringEquals: true, OpStringLike: true},
+	KeyUserID: operators(stringEqualsOps, stringLikeOps),
 	// Not caller-chosen: both doors resolve it from the credential record, not
 	// from anything the request carries, so it clears the bar aws:username
 	// fails for role sessions.
-	KeyPrincipalType: {OpStringEquals: true, OpStringLike: true},
+	KeyPrincipalType: operators(stringEqualsOps, stringLikeOps),
 	// Fixed by the service performing the PassRole check, never read from the
 	// request, and absent on every other action.
-	KeyPassedToService: {OpStringEquals: true, OpStringLike: true},
+	KeyPassedToService: operators(stringEqualsOps, stringLikeOps),
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.
@@ -68,20 +106,28 @@ func SupportedCondition(operator, key string) bool {
 }
 
 // ConditionKeys carries the condition context keys resolved for one request. An
-// absent key evaluates its condition false, so absent must stay distinguishable
-// from present-but-empty.
+// absent key evaluates its condition false, or true under a negated operator, so
+// absent must stay distinguishable from present-but-empty.
 type ConditionKeys map[string]string
 
 // conditionsHold reports whether every condition block on the statement is
 // satisfied. Blocks and keys are ANDed, values within one key ORed, per AWS.
 //
 // A value carrying a policy variable this door cannot resolve takes failClosed,
-// so a Deny survives one rather than disappearing.
+// so a Deny survives one rather than disappearing. An absent key holds only
+// under a negated operator, so omitting it cannot stop a negated Deny firing.
 func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 	for op, byKey := range s.Condition {
+		_, negated := negatedOperators[op]
 		for key, values := range byKey {
 			actual, present := keys[key]
-			if !present || !conditionHolds(op, actual, values, keys, failClosed) {
+			if !present {
+				if negated {
+					continue
+				}
+				return false
+			}
+			if !conditionHolds(op, actual, values, keys, failClosed) {
 				return false
 			}
 		}
@@ -92,22 +138,24 @@ func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 // conditionHolds applies one operator to the request's value for a key. An
 // unrecognized operator returns false; callers reject those before reaching here.
 //
-// keys resolves policy variables in the string operators' values. Bool and
-// IpAddress values are compared as written, a variable in either having no
+// keys resolves policy variables in the string and ARN operators' values. Bool
+// and IpAddress values are compared as written, a variable in either having no
 // meaning. A value carrying an unresolvable reference takes failClosed.
 func conditionHolds(operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
+	// Inverting failClosed inside the match keeps an unresolvable value narrowing
+	// access after the negation, as NotResource does.
+	if positive, negated := negatedOperators[operator]; negated {
+		return !conditionHolds(positive, actual, values, keys, !failClosed)
+	}
+
 	switch operator {
 	case OpStringEquals:
+		return equalsAny(actual, values, keys, failClosed, false)
+	case OpStringEqualsIgnoreCase:
+		return equalsAny(actual, values, keys, failClosed, true)
+	case OpArnEquals, OpArnLike:
 		for _, v := range values {
-			// Values are ORed, so an unresolvable one must not cut the scan short.
-			switch resolved, result := expandVariables(v, keys, false); {
-			case result == expansionUnresolvable:
-				slog.Debug("iampolicy: policy variable is unresolvable at this door",
-					"value", v, "matches", failClosed)
-				if failClosed {
-					return true
-				}
-			case resolved == actual:
+			if matchARN(v, actual, keys, failClosed) {
 				return true
 			}
 		}
@@ -125,6 +173,27 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		}
 	case OpIPAddress:
 		return ipInAny(actual, values, failClosed)
+	}
+	return false
+}
+
+// equalsAny reports whether actual equals any value after resolving its policy
+// variables, folding case when fold is true. A value carrying an unresolvable
+// reference takes failClosed.
+func equalsAny(actual string, values []string, keys ConditionKeys, failClosed, fold bool) bool {
+	for _, v := range values {
+		// Values are ORed, so an unresolvable one must not cut the scan short.
+		resolved, result := expandVariables(v, keys, false)
+		switch {
+		case result == expansionUnresolvable:
+			slog.Debug("iampolicy: policy variable is unresolvable at this door",
+				"value", v, "matches", failClosed)
+			if failClosed {
+				return true
+			}
+		case fold && strings.EqualFold(resolved, actual), !fold && resolved == actual:
+			return true
+		}
 	}
 	return false
 }

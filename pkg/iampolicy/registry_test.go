@@ -27,9 +27,18 @@ var allConditionKeys = []string{
 // has to cover the operators a policy can be written with.
 var allOperators = []string{
 	iampolicy.OpStringEquals,
+	iampolicy.OpStringNotEquals,
+	iampolicy.OpStringEqualsIgnoreCase,
+	iampolicy.OpStringNotEqualsIgnoreCase,
 	iampolicy.OpStringLike,
+	iampolicy.OpStringNotLike,
 	iampolicy.OpIPAddress,
+	iampolicy.OpNotIPAddress,
 	iampolicy.OpBool,
+	iampolicy.OpArnEquals,
+	iampolicy.OpArnLike,
+	iampolicy.OpArnNotEquals,
+	iampolicy.OpArnNotLike,
 }
 
 // Empty on purpose: every substitutable key is supplied by a door, so the gate

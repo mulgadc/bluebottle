@@ -89,8 +89,19 @@ func TestSupportedCondition(t *testing.T) {
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyUserID))
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringLike, iampolicy.KeyUserID))
 
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNotIPAddress, iampolicy.KeySourceIP))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringNotEquals, iampolicy.KeyUsername))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringNotLike, iampolicy.KeyUserID))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyPrincipalType))
+
 	// Right key, wrong operator.
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeySourceIP))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringNotEquals, iampolicy.KeySourceIP))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpNotIPAddress, iampolicy.KeyUsername))
+	// StringNotLike follows StringLike, which aws:username does not carry.
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringNotLike, iampolicy.KeyUsername))
+	// No supported key is ARN-valued.
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpArnLike, iampolicy.KeyUserID))
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpIPAddress, iampolicy.KeyUsername))
 	// MFA is hard-dropped: spinifex has no MFA, so the key could never be true.
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpBool, "aws:MultiFactorAuthPresent"))
@@ -181,6 +192,47 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 		// Present but empty is not the same as absent, and still compares.
 		{"present but empty", iampolicy.OpStringEquals, iampolicy.KeyUsername,
 			[]string{""}, iampolicy.ConditionKeys{iampolicy.KeyUsername: ""}, iampolicy.Allow},
+
+		{"StringNotEquals other value", iampolicy.OpStringNotEquals, iampolicy.KeyUsername,
+			[]string{"bob"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Allow},
+		{"StringNotEquals same value", iampolicy.OpStringNotEquals, iampolicy.KeyUsername,
+			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Deny},
+		{"StringNotEquals is case-sensitive", iampolicy.OpStringNotEquals, iampolicy.KeyUsername,
+			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "Alice"}, iampolicy.Allow},
+		// Negated, the ORed values become "none of": one hit is enough to fail.
+		{"StringNotEquals any of several", iampolicy.OpStringNotEquals, iampolicy.KeyUsername,
+			[]string{"bob", "alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Deny},
+		{"StringNotLike outside the pattern", iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix,
+			[]string{"home/alice/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/bob/"}, iampolicy.Allow},
+		{"StringNotLike inside the pattern", iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix,
+			[]string{"home/alice/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/docs/"}, iampolicy.Deny},
+		{"StringEqualsIgnoreCase folds case", iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyPrincipalType,
+			[]string{"assumedrole"}, iampolicy.ConditionKeys{iampolicy.KeyPrincipalType: "AssumedRole"}, iampolicy.Allow},
+		{"StringEqualsIgnoreCase mismatch", iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyPrincipalType,
+			[]string{"user"}, iampolicy.ConditionKeys{iampolicy.KeyPrincipalType: "AssumedRole"}, iampolicy.Deny},
+		// Equality, not a glob: a * in the value is a literal.
+		{"StringEqualsIgnoreCase has no wildcards", iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyPrincipalType,
+			[]string{"*"}, iampolicy.ConditionKeys{iampolicy.KeyPrincipalType: "User"}, iampolicy.Deny},
+		{"StringNotEqualsIgnoreCase folds case", iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.KeyUsername,
+			[]string{"ALICE"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Deny},
+		{"StringNotEqualsIgnoreCase other value", iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.KeyUsername,
+			[]string{"BOB"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Allow},
+		{"NotIpAddress outside CIDR", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			[]string{"10.0.0.0/8"}, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "192.168.1.1"}, iampolicy.Allow},
+		{"NotIpAddress inside CIDR", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			[]string{"10.0.0.0/8"}, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "10.4.1.9"}, iampolicy.Deny},
+		{"NotIpAddress inside any of several", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			[]string{"172.16.0.0/12", "10.0.0.0/8"}, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "10.4.1.9"}, iampolicy.Deny},
+
+		// Per AWS, a negated operator on an absent key holds.
+		{"StringNotEquals absent key", iampolicy.OpStringNotEquals, iampolicy.KeyUsername,
+			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AROAOPS:deploy"}, iampolicy.Allow},
+		{"StringNotLike absent key", iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix,
+			[]string{"home/*"}, nil, iampolicy.Allow},
+		{"NotIpAddress absent key", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			[]string{"10.0.0.0/8"}, nil, iampolicy.Allow},
+		{"StringEqualsIgnoreCase absent key", iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyUsername,
+			[]string{"alice"}, nil, iampolicy.Deny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -285,6 +337,57 @@ func TestEvaluateWithKeys_StringEqualsResolvesVariables(t *testing.T) {
 		[]iampolicy.PolicyDocument{d}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice"}))
 }
 
+// The guarantee a negated Deny exists for: no request can stop it firing by
+// leaving the key out, whatever else the request carries.
+func TestEvaluateWithKeys_NegatedDenyFiresOnAbsentKey(t *testing.T) {
+	for _, op := range []string{
+		iampolicy.OpStringNotEquals, iampolicy.OpStringNotLike,
+		iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.OpNotIPAddress,
+	} {
+		deny := condDoc(op, iampolicy.KeySourceIP, "10.0.0.0/8")
+		deny.Statement[0].Effect = iampolicy.EffectDeny
+		for _, keys := range []iampolicy.ConditionKeys{nil, {iampolicy.KeyUsername: "alice"}} {
+			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "%s with keys %v", op, keys)
+		}
+	}
+}
+
+// Input a negated operator cannot resolve narrows access just as it does for
+// the positive form: the negation must not turn a fail-closed Deny into a no-op.
+func TestEvaluateWithKeys_NegatedOperatorFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		op     string
+		key    string
+		value  string
+		actual string
+	}{
+		{"unresolvable variable", iampolicy.OpStringNotEquals, iampolicy.KeyS3Prefix,
+			"home/${aws:username}", "home/alice"},
+		{"unresolvable variable, case-insensitive", iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.KeyS3Prefix,
+			"home/${aws:username}", "home/alice"},
+		{"unresolvable variable in a pattern", iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix,
+			"home/${aws:username}/*", "home/alice/x"},
+		{"unparseable request address", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			"10.0.0.0/8", "10.4.1.9:54321"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys := iampolicy.ConditionKeys{tt.key: tt.actual}
+
+			allow := condDoc(tt.op, tt.key, tt.value)
+			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+				[]iampolicy.PolicyDocument{allow}, keys), "the Allow must not grant")
+
+			deny := condDoc(tt.op, tt.key, tt.value)
+			deny.Statement[0].Effect = iampolicy.EffectDeny
+			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "the Deny must fire")
+		})
+	}
+}
+
 // A reference the evaluator does not support makes a condition non-matching,
 // even when the request value contains the placeholder text literally.
 func TestEvaluateWithKeys_UnsupportedReferenceDoesNotMatch(t *testing.T) {
@@ -302,8 +405,10 @@ func TestEvaluateWithKeys_UnsupportedReferenceDoesNotMatch(t *testing.T) {
 // which iterates the allowlist rather than a hardcoded copy.
 func TestSupportedCondition_MatchesImplementedOperators(t *testing.T) {
 	implemented := []string{
-		iampolicy.OpStringEquals, iampolicy.OpStringLike,
-		iampolicy.OpIPAddress, iampolicy.OpBool,
+		iampolicy.OpStringEquals, iampolicy.OpStringNotEquals,
+		iampolicy.OpStringEqualsIgnoreCase, iampolicy.OpStringNotEqualsIgnoreCase,
+		iampolicy.OpStringLike, iampolicy.OpStringNotLike,
+		iampolicy.OpIPAddress, iampolicy.OpNotIPAddress, iampolicy.OpBool,
 	}
 	keys := []string{
 		iampolicy.KeySourceIP, iampolicy.KeyS3Prefix, iampolicy.KeySecureTransport,
