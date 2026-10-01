@@ -531,14 +531,14 @@ func TestEvaluate_DoorsResolveTheSameDocument(t *testing.T) {
 				}
 
 				allowed := iampolicy.EvaluateWithKeys(action, resource,
-					[]iampolicy.PolicyDocument{{Statement: []iampolicy.Statement{
+					[]iampolicy.PolicyDocument{{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{
 						effected(tc.stmt, iampolicy.EffectAllow),
 					}}}, d.keys)
 
 				denied := iampolicy.EvaluateWithKeys(action, resource,
 					[]iampolicy.PolicyDocument{
-						{Statement: []iampolicy.Statement{effected(tc.stmt, iampolicy.EffectDeny)}},
-						{Statement: []iampolicy.Statement{stmt("Allow", "s3:*", "*")}},
+						{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{effected(tc.stmt, iampolicy.EffectDeny)}},
+						{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{stmt("Allow", "s3:*", "*")}},
 					}, d.keys)
 
 				assert.Equal(t, want == grants, allowed == iampolicy.Allow,

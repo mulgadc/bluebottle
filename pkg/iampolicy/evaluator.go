@@ -33,12 +33,17 @@ const (
 //
 // Resource patterns and string condition values may carry ${key} policy
 // variables, resolved from keys. An unresolvable one fails closed: it makes an
-// Allow non-matching and a Deny matching, so it can only narrow access.
+// Allow non-matching and a Deny matching, so it can only narrow access. In a
+// document not written in Version2012, ${...} is literal text, as in AWS.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
 	hasAllow := false
 	for i := range policies {
-		for j := range policies[i].Statement {
-			stmt := &policies[i].Statement[j]
+		statements := policies[i].Statement
+		if policies[i].Version != Version2012 {
+			statements = literalVariableStatements(statements)
+		}
+		for j := range statements {
+			stmt := &statements[j]
 
 			if !stmt.matches(action, resource, keys) {
 				continue

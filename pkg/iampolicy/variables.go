@@ -164,3 +164,74 @@ func writeEscaped(b *strings.Builder, s, chars string) {
 		b.WriteByte(s[i])
 	}
 }
+
+// literalReference is how a ${ is written as literal text: the ${$} escape
+// yields the "$", and the "{" that follows is ordinary text.
+const literalReference = VariablePrefix + "$}{"
+
+// literalVariableStatements returns statements with every ${ in a resource
+// pattern or condition value rewritten to read as literal text, for a document
+// whose Version predates policy variables. The caller's slice is never modified.
+func literalVariableStatements(statements []Statement) []Statement {
+	var out []Statement
+	for i := range statements {
+		if !statements[i].hasVariablePrefix() {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(statements)
+		}
+		out[i] = withLiteralVariables(statements[i])
+	}
+	if out == nil {
+		return statements
+	}
+	return out
+}
+
+func (s *Statement) hasVariablePrefix() bool {
+	if containsVariablePrefix(s.Resource) || containsVariablePrefix(s.NotResource) {
+		return true
+	}
+	for _, byKey := range s.Condition {
+		for _, values := range byKey {
+			if containsVariablePrefix(values) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsVariablePrefix(values []string) bool {
+	return slices.ContainsFunc(values, func(v string) bool { return strings.Contains(v, VariablePrefix) })
+}
+
+// withLiteralVariables returns a copy of stmt with its resource patterns and
+// condition values rewritten, sharing nothing mutable with stmt.
+func withLiteralVariables(stmt Statement) Statement {
+	literal := func(values []string) []string {
+		if values == nil {
+			return nil
+		}
+		out := make([]string, len(values))
+		for i, v := range values {
+			out[i] = strings.ReplaceAll(v, VariablePrefix, literalReference)
+		}
+		return out
+	}
+
+	stmt.Resource = literal(stmt.Resource)
+	stmt.NotResource = literal(stmt.NotResource)
+	if stmt.Condition != nil {
+		conditions := make(map[string]map[string]ConditionValue, len(stmt.Condition))
+		for op, byKey := range stmt.Condition {
+			conditions[op] = make(map[string]ConditionValue, len(byKey))
+			for key, values := range byKey {
+				conditions[op][key] = literal(values)
+			}
+		}
+		stmt.Condition = conditions
+	}
+	return stmt
+}

@@ -230,7 +230,7 @@ func TestEvaluate_UnenforceableDenyKeepsNotSelectors(t *testing.T) {
 }
 
 func notActionDoc(effect string, notAction ...string) iampolicy.PolicyDocument {
-	return iampolicy.PolicyDocument{Statement: []iampolicy.Statement{{
+	return iampolicy.PolicyDocument{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{{
 		Effect:    effect,
 		NotAction: notAction,
 		Resource:  iampolicy.StringOrArr{"*"},
@@ -238,7 +238,7 @@ func notActionDoc(effect string, notAction ...string) iampolicy.PolicyDocument {
 }
 
 func notResourceDoc(effect string, notResource ...string) iampolicy.PolicyDocument {
-	return iampolicy.PolicyDocument{Statement: []iampolicy.Statement{{
+	return iampolicy.PolicyDocument{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{{
 		Effect:      effect,
 		Action:      iampolicy.StringOrArr{"s3:*"},
 		NotResource: notResource,
@@ -479,4 +479,93 @@ func TestEvaluate_AccountAndUserIDVariables(t *testing.T) {
 	denyUserID := []iampolicy.PolicyDocument{doc("Deny", "s3:GetObject", "arn:aws:s3:::u/${aws:userid}/*")}
 	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject",
 		"arn:aws:s3:::u/bob/k", denyUserID, iampolicy.ConditionKeys{}))
+}
+
+// Under 2008-10-17, and with Version omitted, ${...} is literal text as in AWS,
+// while the rest of the pattern keeps its wildcards.
+func TestEvaluate_LegacyVersionTreatsVariablesAsLiterals(t *testing.T) {
+	alice := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}
+	const pattern = "arn:aws:s3:::home/${aws:username}/*"
+
+	for _, version := range []string{iampolicy.Version2008, ""} {
+		p := doc("Allow", "s3:GetObject", pattern)
+		p.Version = version
+		policies := []iampolicy.PolicyDocument{p}
+
+		assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/a", policies, alice),
+			"version %q must not resolve the variable", version)
+		assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/${aws:username}/a", policies, alice),
+			"version %q must match the literal text", version)
+		assert.Equal(t, pattern, policies[0].Statement[0].Resource[0], "the caller's document must not be rewritten")
+	}
+
+	current := []iampolicy.PolicyDocument{doc("Allow", "s3:GetObject", pattern)}
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/a", current, alice))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/${aws:username}/a", current, alice))
+}
+
+// A legacy-version reference to a key no door supplies is literal text, so it
+// neither fails closed on an Allow nor on a Deny.
+func TestEvaluate_LegacyVersionUnknownVariableIsLiteral(t *testing.T) {
+	allow := doc("Allow", "s3:GetObject", "arn:aws:s3:::${unknown}/*")
+	allow.Version = iampolicy.Version2008
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::${unknown}/a",
+		[]iampolicy.PolicyDocument{allow}, nil))
+
+	deny := doc("Deny", "s3:GetObject", "arn:aws:s3:::${unknown}/*")
+	deny.Version = iampolicy.Version2008
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::other/a",
+		[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, nil))
+}
+
+// Condition values in a legacy-version document compare ${...} literally.
+func TestEvaluate_LegacyVersionConditionValueIsLiteral(t *testing.T) {
+	p := doc("Allow", "s3:ListBucket", "*")
+	p.Version = iampolicy.Version2008
+	p.Statement[0].Condition = map[string]map[string]iampolicy.ConditionValue{
+		iampolicy.OpStringLike: {iampolicy.KeyS3Prefix: {"home/${aws:username}/*"}},
+	}
+	policies := []iampolicy.PolicyDocument{p}
+
+	resolved := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice", iampolicy.KeyS3Prefix: "home/alice/x"}
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:ListBucket", "*", policies, resolved))
+
+	literal := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice", iampolicy.KeyS3Prefix: "home/${aws:username}/x"}
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:ListBucket", "*", policies, literal))
+	assert.Equal(t, "home/${aws:username}/*", p.Statement[0].Condition[iampolicy.OpStringLike][iampolicy.KeyS3Prefix][0],
+		"the caller's condition must not be rewritten")
+}
+
+// A legacy-version document keeps its statements without ${...} untouched beside
+// the ones it rewrites.
+func TestEvaluate_LegacyVersionKeepsEveryStatement(t *testing.T) {
+	alice := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}
+	p := iampolicy.PolicyDocument{Version: iampolicy.Version2008, Statement: []iampolicy.Statement{
+		doc("Deny", "s3:DeleteObject", "*").Statement[0],
+		doc("Allow", "s3:*", "arn:aws:s3:::home/${aws:username}/*").Statement[0],
+	}}
+	policies := []iampolicy.PolicyDocument{p}
+	const literal = "arn:aws:s3:::home/${aws:username}/a"
+
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:DeleteObject", literal, policies, alice))
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", literal, policies, alice))
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/a", policies, alice))
+}
+
+// A legacy-version NotResource is literal text too.
+func TestEvaluate_LegacyVersionNotResourceIsLiteral(t *testing.T) {
+	alice := iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}
+	deny := notResourceDoc("Deny", "arn:aws:s3:::home/${aws:username}/*")
+	deny.Statement[0].Action = iampolicy.StringOrArr{"s3:GetObject"}
+	deny.Version = iampolicy.Version2008
+	allow := doc("Allow", "s3:GetObject", "arn:aws:s3:::home/${aws:username}/*")
+	policies := []iampolicy.PolicyDocument{deny, allow}
+
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/alice/a", policies, alice),
+		"the 2008 NotResource must not resolve, so home/alice is outside it and denied")
+	assert.Equal(t, "arn:aws:s3:::home/${aws:username}/*", deny.Statement[0].NotResource[0])
+
+	allowLiteral := doc("Allow", "s3:GetObject", "arn:aws:s3:::home/*")
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::home/${aws:username}/a",
+		[]iampolicy.PolicyDocument{deny, allowLiteral}, alice), "the literal path is inside the 2008 NotResource")
 }

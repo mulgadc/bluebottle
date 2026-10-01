@@ -15,6 +15,11 @@ const (
 	EffectAllow = "Allow"
 	// EffectDeny is the statement Effect that denies access (wins over Allow).
 	EffectDeny = "Deny"
+
+	// Version2012 is the current policy language, the only one that resolves
+	// policy variables. Version2008 is the earlier one, which IAM still accepts.
+	Version2012 = "2012-10-17"
+	Version2008 = "2008-10-17"
 )
 
 // PolicyDocument is the parsed IAM policy JSON structure.
