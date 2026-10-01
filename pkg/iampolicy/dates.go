@@ -21,6 +21,12 @@ var dateLayouts = []string{
 // currentTimeLayout is how the doors spell aws:CurrentTime: UTC, whole seconds.
 const currentTimeLayout = "2006-01-02T15:04:05Z"
 
+// 0001-01-01T00:00:00Z and 9999-12-31T23:59:59Z in epoch seconds.
+const (
+	minEpochSeconds = -62135596800
+	maxEpochSeconds = 253402300799
+)
+
 var errNotADate = errors.New("not an ISO 8601 date or epoch seconds")
 
 // ParseDate reads a date condition value or a date-valued request key: one of
@@ -29,10 +35,16 @@ var errNotADate = errors.New("not an ISO 8601 date or epoch seconds")
 func ParseDate(s string) (time.Time, error) {
 	if allDigits(strings.TrimPrefix(s, "-")) {
 		secs, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		// time.Unix wraps near the int64 limits, so bound epoch seconds to the
+		// years the ISO 8601 forms can spell.
+		if err != nil || secs < minEpochSeconds || secs > maxEpochSeconds {
 			return time.Time{}, errNotADate
 		}
 		return time.Unix(secs, 0).UTC(), nil
+	}
+	// Go reads a comma before fractional seconds; AWS documents only the period.
+	if strings.Contains(s, ",") {
+		return time.Time{}, errNotADate
 	}
 	for _, layout := range dateLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
