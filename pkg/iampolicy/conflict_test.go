@@ -34,7 +34,7 @@ func sourceSlice(at map[string]iampolicy.Statement) []iampolicy.PolicyDocument {
 // unenforceableCondition names an operator outside the supported set, so any
 // statement carrying it takes the fail-closed path.
 var unenforceableCondition = map[string]map[string]iampolicy.ConditionValue{
-	"NumericLessThan": {"s3:max-keys": {"10"}},
+	"NumericLessThan": {"aws:MultiFactorAuthAge": {"3600"}},
 }
 
 func stmt(effect, action, resource string) iampolicy.Statement {

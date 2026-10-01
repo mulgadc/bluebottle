@@ -113,6 +113,17 @@ func TestSupportedCondition(t *testing.T) {
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpDateGreaterThan, iampolicy.KeyUsername))
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyCurrentTime))
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpDateLessThan, "aws:TokenIssueTime"))
+	// The numeric family is on s3:max-keys and aws:EpochTime and nowhere else.
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNumericLessThanEquals, iampolicy.KeyS3MaxKeys))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys))
+	assert.True(t, iampolicy.SupportedCondition("NumericGreaterThanIfExists", iampolicy.KeyS3MaxKeys))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNumericGreaterThan, iampolicy.KeyEpochTime))
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNull, iampolicy.KeyS3MaxKeys))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpNumericEquals, iampolicy.KeyCurrentTime))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpDateEquals, iampolicy.KeyS3MaxKeys))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpStringEquals, iampolicy.KeyS3MaxKeys))
+	// No MFA, so its age could never be supplied either.
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpNumericLessThan, "aws:MultiFactorAuthAge"))
 
 	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNull, iampolicy.KeyS3Prefix))
 	assert.True(t, iampolicy.SupportedCondition("StringLikeIfExists", iampolicy.KeyUserID))
@@ -331,6 +342,53 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 			[]string{"2027-01-01"}, nil, iampolicy.Allow},
 		{"DateGreaterThanIfExists present key", iampolicy.OpDateGreaterThan + iampolicy.IfExistsSuffix, iampolicy.KeyCurrentTime,
 			[]string{"2027-01-01"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Deny},
+
+		// Numeric operators compare exact decimals; the boundary decides the
+		// strict and inclusive forms.
+		{"NumericEquals another spelling", iampolicy.OpNumericEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"1.0e2"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericEquals one off", iampolicy.OpNumericEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"101"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericNotEquals equal", iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"100"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericNotEquals different", iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"100.5"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericLessThan below", iampolicy.OpNumericLessThan, iampolicy.KeyS3MaxKeys,
+			[]string{"100.5"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericLessThan at the boundary", iampolicy.OpNumericLessThan, iampolicy.KeyS3MaxKeys,
+			[]string{"100"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericLessThanEquals at the boundary", iampolicy.OpNumericLessThanEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"100"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericLessThanEquals above", iampolicy.OpNumericLessThanEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"99.99"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericGreaterThan above", iampolicy.OpNumericGreaterThan, iampolicy.KeyS3MaxKeys,
+			[]string{"10"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericGreaterThan at the boundary", iampolicy.OpNumericGreaterThan, iampolicy.KeyS3MaxKeys,
+			[]string{"100"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericGreaterThanEquals at the boundary", iampolicy.OpNumericGreaterThanEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"100"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericGreaterThanEquals below", iampolicy.OpNumericGreaterThanEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"100.01"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		{"NumericGreaterThan on epoch seconds", iampolicy.OpNumericGreaterThan, iampolicy.KeyEpochTime,
+			[]string{"1790855999"}, iampolicy.ConditionKeys{iampolicy.KeyEpochTime: "1790856000"}, iampolicy.Allow},
+		{"NumericLessThan values are ORed", iampolicy.OpNumericLessThan, iampolicy.KeyS3MaxKeys,
+			[]string{"10", "1000"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		// An unparseable value matches nothing, but does not stop the scan.
+		{"NumericLessThan skips an unparseable value", iampolicy.OpNumericLessThan, iampolicy.KeyS3MaxKeys,
+			[]string{"lots", "1000"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Allow},
+		{"NumericLessThan unparseable value alone", iampolicy.OpNumericLessThan, iampolicy.KeyS3MaxKeys,
+			[]string{"lots"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
+		// Policy variables are not supported with numeric operators: compared as written.
+		{"NumericEquals does not expand a variable", iampolicy.OpNumericEquals, iampolicy.KeyEpochTime,
+			[]string{"${aws:EpochTime}"}, iampolicy.ConditionKeys{iampolicy.KeyEpochTime: "1790856000"}, iampolicy.Deny},
+		{"NumericLessThanEquals absent key", iampolicy.OpNumericLessThanEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"1000"}, nil, iampolicy.Deny},
+		{"NumericNotEquals absent key", iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys,
+			[]string{"1000"}, nil, iampolicy.Allow},
+		{"NumericLessThanEqualsIfExists absent key", iampolicy.OpNumericLessThanEquals + iampolicy.IfExistsSuffix,
+			iampolicy.KeyS3MaxKeys, []string{"10"}, nil, iampolicy.Allow},
+		{"NumericLessThanEqualsIfExists present key", iampolicy.OpNumericLessThanEquals + iampolicy.IfExistsSuffix,
+			iampolicy.KeyS3MaxKeys, []string{"10"}, iampolicy.ConditionKeys{iampolicy.KeyS3MaxKeys: "100"}, iampolicy.Deny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -535,6 +593,10 @@ func TestEvaluateWithKeys_IfExistsFailsClosedOnPresentKey(t *testing.T) {
 			"2027-01-01", "2026-10-01 12:00:00"},
 		{"unparseable request date under negation", iampolicy.OpDateNotEquals, iampolicy.KeyEpochTime,
 			"2027-01-01", "1790856000.5"},
+		{"unparseable request number", iampolicy.OpNumericLessThanEquals, iampolicy.KeyS3MaxKeys,
+			"1000", "ten"},
+		{"unparseable request number under negation", iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys,
+			"1000", " 10"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -595,7 +657,7 @@ func TestSupportedCondition_MatchesImplementedOperators(t *testing.T) {
 		iampolicy.KeyUsername, iampolicy.KeyPrincipalAccount,
 	}
 	for _, key := range keys {
-		for _, op := range []string{"DateGreaterThan", "ArnLike", "NumericLessThan"} {
+		for _, op := range []string{"DateGreaterThan", "ArnLike", "NumericLessThan", "BinaryEquals"} {
 			assert.False(t, iampolicy.SupportedCondition(op, key),
 				"operator %q on %q is advertised but not implemented", op, key)
 		}

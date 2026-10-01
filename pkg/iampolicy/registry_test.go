@@ -14,6 +14,7 @@ import (
 var allConditionKeys = []string{
 	iampolicy.KeySourceIP,
 	iampolicy.KeyS3Prefix,
+	iampolicy.KeyS3MaxKeys,
 	iampolicy.KeySecureTransport,
 	iampolicy.KeyUsername,
 	iampolicy.KeyPrincipalAccount,
@@ -48,6 +49,12 @@ var allOperators = []string{
 	iampolicy.OpDateLessThanEquals,
 	iampolicy.OpDateGreaterThan,
 	iampolicy.OpDateGreaterThanEquals,
+	iampolicy.OpNumericEquals,
+	iampolicy.OpNumericNotEquals,
+	iampolicy.OpNumericLessThan,
+	iampolicy.OpNumericLessThanEquals,
+	iampolicy.OpNumericGreaterThan,
+	iampolicy.OpNumericGreaterThanEquals,
 }
 
 // Empty on purpose: every substitutable key is supplied by a door, so the gate
