@@ -107,7 +107,6 @@ func TestMatchARN(t *testing.T) {
 		// The resource component runs to the end, so it may carry colons.
 		{"resource component spans colons", "arn:aws:logs:us-east-1:111122223333:log-group:*",
 			"arn:aws:logs:us-east-1:111122223333:log-group:app:log-stream:x", nil, true},
-		{"value is not an ARN", "arn:aws:iam::*:role/*", "ops", nil, false},
 		{"pattern is not an ARN", "arn:aws:iam", role, nil, false},
 		{"variable resolves", "arn:aws:iam::${aws:PrincipalAccount}:role/ops", role,
 			ConditionKeys{KeyPrincipalAccount: "111122223333"}, true},
@@ -116,6 +115,10 @@ func TestMatchARN(t *testing.T) {
 		// A role session's ID carries a colon; it must not shift a component.
 		{"colon-bearing variable stays in its component", "arn:aws:s3:::home/${aws:userid}/*",
 			"arn:aws:s3:::home/AROAOPS:deploy/x", ConditionKeys{KeyUserID: "AROAOPS:deploy"}, true},
+		// Substituting before splitting would let the value's colon line up
+		// with the account and resource boundary and match.
+		{"colon-bearing variable does not shift a boundary", "arn:aws:iam::${aws:userid}:role/x",
+			"arn:aws:iam::111:222:role/x", ConditionKeys{KeyUserID: "111:222"}, false},
 		{"substituted wildcard is literal", "arn:aws:s3:::home/${aws:username}",
 			"arn:aws:s3:::home/alice", ConditionKeys{KeyUsername: "*"}, false},
 	}
@@ -124,6 +127,7 @@ func TestMatchARN(t *testing.T) {
 			assert.Equal(t, tt.want, conditionHolds(OpArnLike, tt.value, []string{tt.pattern}, tt.keys, false))
 			assert.Equal(t, tt.want, conditionHolds(OpArnEquals, tt.value, []string{tt.pattern}, tt.keys, false))
 			assert.Equal(t, !tt.want, conditionHolds(OpArnNotLike, tt.value, []string{tt.pattern}, tt.keys, false))
+			assert.Equal(t, !tt.want, conditionHolds(OpArnNotEquals, tt.value, []string{tt.pattern}, tt.keys, false))
 		})
 	}
 }
@@ -136,5 +140,15 @@ func TestMatchARN_UnresolvableVariableFailsClosed(t *testing.T) {
 	for _, op := range []string{OpArnLike, OpArnNotLike} {
 		assert.False(t, conditionHolds(op, role, pattern, nil, false), "%s in an Allow", op)
 		assert.True(t, conditionHolds(op, role, pattern, nil, true), "%s in a Deny", op)
+	}
+}
+
+// A request value that is not an ARN is input the matcher cannot compare, so
+// it narrows access before and after negation, as an unparseable address does.
+func TestMatchARN_NonARNValueFailsClosed(t *testing.T) {
+	pattern := []string{"arn:aws:iam::*:role/*"}
+	for _, op := range []string{OpArnLike, OpArnNotLike} {
+		assert.False(t, conditionHolds(op, "ops", pattern, nil, false), "%s in an Allow", op)
+		assert.True(t, conditionHolds(op, "ops", pattern, nil, true), "%s in a Deny", op)
 	}
 }

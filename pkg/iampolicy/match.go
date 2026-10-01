@@ -159,10 +159,12 @@ func matchARN(pattern, value string, keys ConditionKeys, failClosed bool) bool {
 	if !ok {
 		return false
 	}
-	// The value is a resolved ARN, so a plain split is exact.
+	// The value is a resolved ARN, so a plain split is exact. One that is not an
+	// ARN is input this door cannot match, so it takes failClosed.
 	valueParts := strings.SplitN(value, ":", arnComponents)
 	if len(valueParts) < arnComponents {
-		return false
+		slog.Warn("iampolicy: request value is not an ARN", "value", value, "matches", failClosed)
+		return failClosed
 	}
 	for i := range patternParts {
 		if !matchPattern(patternParts[i], valueParts[i], keys, failClosed) {

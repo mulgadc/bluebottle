@@ -264,6 +264,28 @@ func TestEvaluateWithKeys_MultipleConditionsAreAnded(t *testing.T) {
 		iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k", []iampolicy.PolicyDocument{d}, plaintext))
 }
 
+// An absent key satisfies its negated condition and nothing more: the other
+// conditions are still ANDed. Map order is random, so each case runs repeatedly.
+func TestEvaluateWithKeys_NegatedAbsentKeyStillAndsTheRest(t *testing.T) {
+	separateBlocks := condDoc(iampolicy.OpStringNotEquals, iampolicy.KeyUsername, "bob")
+	separateBlocks.Statement[0].Condition[iampolicy.OpIPAddress] = map[string]iampolicy.ConditionValue{
+		iampolicy.KeySourceIP: {"10.0.0.0/8"},
+	}
+	sameBlock := condDoc(iampolicy.OpStringNotEquals, iampolicy.KeyUsername, "bob")
+	sameBlock.Statement[0].Condition[iampolicy.OpStringNotEquals][iampolicy.KeyPrincipalAccount] =
+		iampolicy.ConditionValue{"111122223333"}
+
+	keys := iampolicy.ConditionKeys{
+		iampolicy.KeySourceIP: "192.0.2.10", iampolicy.KeyPrincipalAccount: "111122223333",
+	}
+	for range 50 {
+		assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+			[]iampolicy.PolicyDocument{separateBlocks}, keys), "separate blocks")
+		assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+			[]iampolicy.PolicyDocument{sameBlock}, keys), "same block")
+	}
+}
+
 // A Deny whose condition does not hold does not fire, so the Allow stands.
 func TestEvaluateWithKeys_ConditionalDenyRespectsKeys(t *testing.T) {
 	allow := doc("Allow", "s3:*", "*")
@@ -340,15 +362,20 @@ func TestEvaluateWithKeys_StringEqualsResolvesVariables(t *testing.T) {
 // The guarantee a negated Deny exists for: no request can stop it firing by
 // leaving the key out, whatever else the request carries.
 func TestEvaluateWithKeys_NegatedDenyFiresOnAbsentKey(t *testing.T) {
-	for _, op := range []string{
-		iampolicy.OpStringNotEquals, iampolicy.OpStringNotLike,
-		iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.OpNotIPAddress,
+	for _, tt := range []struct{ op, key, value string }{
+		{iampolicy.OpStringNotEquals, iampolicy.KeyUsername, "alice"},
+		{iampolicy.OpStringNotEqualsIgnoreCase, iampolicy.KeyUsername, "alice"},
+		{iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix, "home/*"},
+		{iampolicy.OpNotIPAddress, iampolicy.KeySourceIP, "10.0.0.0/8"},
 	} {
-		deny := condDoc(op, iampolicy.KeySourceIP, "10.0.0.0/8")
+		// An unregistered pair is unenforceable and fires regardless, which
+		// would pass this test without reaching the absent-key path.
+		require.True(t, iampolicy.SupportedCondition(tt.op, tt.key), "%s on %s", tt.op, tt.key)
+		deny := condDoc(tt.op, tt.key, tt.value)
 		deny.Statement[0].Effect = iampolicy.EffectDeny
-		for _, keys := range []iampolicy.ConditionKeys{nil, {iampolicy.KeyUsername: "alice"}} {
+		for _, keys := range []iampolicy.ConditionKeys{nil, {iampolicy.KeyPrincipalAccount: "111122223333"}} {
 			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
-				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "%s with keys %v", op, keys)
+				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "%s with keys %v", tt.op, keys)
 		}
 	}
 }

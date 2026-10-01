@@ -27,8 +27,9 @@ const (
 // Deny with a warning. Root bypass, if any, is handled by the caller.
 //
 // keys carries the request's condition context keys. A condition on a key the
-// caller cannot supply evaluates false, per AWS, so the same policy legitimately
-// gives different answers at different doors. Passing nil fails every condition.
+// caller cannot supply evaluates false, or true under a negated operator, per
+// AWS, so the same policy legitimately gives different answers at different
+// doors. Passing nil fails every condition except the negated ones, which hold.
 //
 // Resource patterns and string condition values may carry ${key} policy
 // variables, resolved from keys. An unresolvable one fails closed: it makes an
