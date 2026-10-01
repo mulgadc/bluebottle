@@ -170,3 +170,62 @@ func TestResolveRoleARN(t *testing.T) {
 		assert.NotErrorIs(t, err, auth.ErrRoleARNMismatch)
 	})
 }
+
+// TestResolvePolicyAndInstanceProfileARN pins the same canonical-ARN comparison
+// for policies and instance profiles that TestResolveRoleARN pins for roles.
+func TestResolvePolicyAndInstanceProfileARN(t *testing.T) {
+	resolvers := []struct {
+		kind        string
+		resolve     func(string, auth.ARNLookup) (string, string, error)
+		errInvalid  error
+		errMismatch error
+	}{
+		{"policy", auth.ResolvePolicyARN, auth.ErrInvalidPolicyARN, auth.ErrPolicyARNMismatch},
+		{"instance-profile", auth.ResolveInstanceProfileARN, auth.ErrInvalidInstanceProfileARN, auth.ErrInstanceProfileARNMismatch},
+	}
+	for _, r := range resolvers {
+		t.Run(r.kind, func(t *testing.T) {
+			arn := func(pathAndName string) string {
+				return "arn:aws:iam::000000000001:" + r.kind + "/" + pathAndName
+			}
+			stored := map[string]string{
+				"Admin":  arn("Admin"),
+				"Worker": arn("team/Worker"),
+			}
+			lookup := func(_, name string) (string, error) {
+				s, ok := stored[name]
+				if !ok {
+					return "", errors.New("NoSuchEntity")
+				}
+				return s, nil
+			}
+
+			t.Run("a stored pathed ARN resolves", func(t *testing.T) {
+				account, name, err := r.resolve(arn("team/Worker"), lookup)
+				require.NoError(t, err)
+				assert.Equal(t, "000000000001", account)
+				assert.Equal(t, "Worker", name)
+			})
+
+			t.Run("an invented path against a pathless stored ARN is rejected", func(t *testing.T) {
+				_, _, err := r.resolve(arn("decoy/Admin"), lookup)
+				require.ErrorIs(t, err, r.errMismatch)
+			})
+
+			t.Run("a pathless ARN against a pathed stored ARN is rejected", func(t *testing.T) {
+				_, _, err := r.resolve(arn("Worker"), lookup)
+				require.ErrorIs(t, err, r.errMismatch)
+			})
+
+			t.Run("a malformed ARN is not looked up", func(t *testing.T) {
+				called := false
+				_, _, err := r.resolve("arn:aws:iam::000000000001:user/Admin", func(_, _ string) (string, error) {
+					called = true
+					return "", nil
+				})
+				require.ErrorIs(t, err, r.errInvalid)
+				assert.False(t, called, "lookup must not run for a malformed ARN")
+			})
+		})
+	}
+}

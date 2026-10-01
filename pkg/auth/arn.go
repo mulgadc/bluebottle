@@ -48,41 +48,78 @@ var (
 	ErrRoleARNMismatch = errors.New("role ARN is not the stored ARN for that role")
 )
 
-// RoleARNLookup returns the canonical ARN the store holds for a role, or an
-// error if it cannot be read.
-type RoleARNLookup func(accountID, roleName string) (storedARN string, err error)
+// ErrInvalidPolicyARN and ErrPolicyARNMismatch are ResolvePolicyARN's
+// counterparts to ErrInvalidRoleARN and ErrRoleARNMismatch.
+var (
+	ErrInvalidPolicyARN  = errors.New("malformed policy ARN")
+	ErrPolicyARNMismatch = errors.New("policy ARN is not the stored ARN for that policy")
+)
+
+// ErrInvalidInstanceProfileARN and ErrInstanceProfileARNMismatch are
+// ResolveInstanceProfileARN's counterparts to ErrInvalidRoleARN and ErrRoleARNMismatch.
+var (
+	ErrInvalidInstanceProfileARN  = errors.New("malformed instance profile ARN")
+	ErrInstanceProfileARNMismatch = errors.New("instance profile ARN is not the stored ARN for that instance profile")
+)
+
+// ARNLookup returns the canonical ARN the store holds for the named IAM
+// resource, or an error if it cannot be read.
+type ARNLookup func(accountID, name string) (storedARN string, err error)
+
+// RoleARNLookup returns the canonical ARN the store holds for a role.
+type RoleARNLookup = ARNLookup
+
+// resolveIAMARN parses a caller-supplied ARN, looks up the stored ARN for the
+// name it carries and requires the two to be identical. Parsing discards any
+// path, so the comparison is what rejects a non-canonical spelling.
+func resolveIAMARN(arn, resource string, lookup ARNLookup, errInvalid, errMismatch error) (accountID, name string, err error) {
+	accountID, name, err = parseIAMARN(arn, resource)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %w", errInvalid, err)
+	}
+	storedARN, err := lookup(accountID, name)
+	if err != nil {
+		return "", "", err
+	}
+	if storedARN != arn {
+		return "", "", errMismatch
+	}
+	return accountID, name, nil
+}
 
 // ResolveRoleARN resolves the role a caller-supplied ARN names and verifies the
 // ARN is the one the store holds. ParseRoleARN discards any path, so comparing
 // the stored ARN back is what stops an invented path reaching a role the ARN
 // does not name. An error from lookup is returned unwrapped.
 func ResolveRoleARN(roleARN string, lookup RoleARNLookup) (accountID, roleName string, err error) {
-	accountID, roleName, err = ParseRoleARN(roleARN)
-	if err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrInvalidRoleARN, err)
-	}
-	storedARN, err := lookup(accountID, roleName)
-	if err != nil {
-		return "", "", err
-	}
-	if storedARN != roleARN {
-		return "", "", ErrRoleARNMismatch
-	}
-	return accountID, roleName, nil
+	return resolveIAMARN(roleARN, "role", lookup, ErrInvalidRoleARN, ErrRoleARNMismatch)
+}
+
+// ResolvePolicyARN is ResolveRoleARN for a customer-managed policy ARN. An
+// AWS-managed ARN has no stored record, so callers screen it out with
+// IsAWSManagedPolicyARN before resolving.
+func ResolvePolicyARN(policyARN string, lookup ARNLookup) (accountID, policyName string, err error) {
+	return resolveIAMARN(policyARN, "policy", lookup, ErrInvalidPolicyARN, ErrPolicyARNMismatch)
+}
+
+// ResolveInstanceProfileARN is ResolveRoleARN for an instance-profile ARN.
+func ResolveInstanceProfileARN(profileARN string, lookup ARNLookup) (accountID, profileName string, err error) {
+	return resolveIAMARN(profileARN, "instance-profile", lookup, ErrInvalidInstanceProfileARN, ErrInstanceProfileARNMismatch)
 }
 
 // ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
-// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional). It
-// fails closed on a malformed ARN exactly as ParseRoleARN does. An AWS-managed
-// ARN parses with accountID "aws"; use IsAWSManagedPolicyARN to distinguish it.
+// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional),
+// failing closed like ParseRoleARN. An AWS-managed ARN parses with accountID
+// "aws". It discards the path; to resolve a caller-supplied ARN, use ResolvePolicyARN.
 func ParsePolicyARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "policy")
 }
 
 // ParseInstanceProfileARN extracts the account ID and profile name from an IAM
 // instance-profile ARN of the form
-// arn:aws:iam::<accountID>:instance-profile/<path>/<name> (path optional). It
-// fails closed on a malformed ARN exactly as ParseRoleARN does.
+// arn:aws:iam::<accountID>:instance-profile/<path>/<name> (path optional),
+// failing closed like ParseRoleARN. It discards the path; to resolve a
+// caller-supplied ARN to a stored profile, use ResolveInstanceProfileARN.
 func ParseInstanceProfileARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "instance-profile")
 }
