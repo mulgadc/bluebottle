@@ -29,7 +29,7 @@ var matcherSamples = map[string]struct {
 	OpArnNotLike:                {"arn:aws:iam::111122223333:role/ops", []string{"arn:aws:s3:::*"}},
 	OpDateEquals:                {"2026-10-01T12:00:00Z", []string{"1790856000"}},
 	OpDateNotEquals:             {"2026-10-01T12:00:00Z", []string{"2026-10-01"}},
-	OpDateLessThan:              {"2026-10-01T12:00:00Z", []string{"2027"}},
+	OpDateLessThan:              {"2026-10-01T12:00:00Z", []string{"2027-01-01"}},
 	OpDateLessThanEquals:        {"2026-10-01T12:00:00Z", []string{"2026-10-01T12:00Z"}},
 	OpDateGreaterThan:           {"1790856000", []string{"2026-10"}},
 	OpDateGreaterThanEquals:     {"1790856000", []string{"2026-10-01T14:00:00+02:00"}},

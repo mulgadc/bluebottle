@@ -4,14 +4,14 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// dateLayouts are the W3C profile of ISO 8601 that AWS accepts for date values,
-// most specific last. Go accepts fractional seconds after the seconds field even
-// though the layout does not spell them, which covers YYYY-MM-DDThh:mm:ss.sTZD.
+// dateLayouts are the W3C ISO 8601 forms AWS documents, bar the bare year, which
+// AWS reads as epoch seconds. Go accepts fractional seconds after the seconds
+// field even though the layout does not spell them, covering ss.sTZD.
 var dateLayouts = []string{
-	"2006",
 	"2006-01",
 	"2006-01-02",
 	"2006-01-02T15:04Z07:00",
@@ -23,11 +23,11 @@ const currentTimeLayout = "2006-01-02T15:04:05Z"
 
 var errNotADate = errors.New("not an ISO 8601 date or epoch seconds")
 
-// ParseDate reads a date condition value or a date-valued request key as AWS
-// does: one of the W3C ISO 8601 forms, or epoch seconds. Four bare digits are a
-// year, every other run of digits epoch seconds. Write paths reject what fails.
+// ParseDate reads a date condition value or a date-valued request key: one of
+// the W3C ISO 8601 forms, or epoch seconds. As in AWS, any run of digits is epoch
+// seconds, four included, and may be negative. Write paths reject what fails.
 func ParseDate(s string) (time.Time, error) {
-	if len(s) != 4 && allDigits(s) {
+	if allDigits(strings.TrimPrefix(s, "-")) {
 		secs, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
 			return time.Time{}, errNotADate

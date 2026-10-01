@@ -20,7 +20,6 @@ func TestParseDate(t *testing.T) {
 		value string
 		want  time.Time
 	}{
-		{"2026", utc("2026-01-01T00:00:00Z")},
 		{"2026-10", utc("2026-10-01T00:00:00Z")},
 		{"2026-10-01", utc("2026-10-01T00:00:00Z")},
 		{"2026-10-01T12:30Z", utc("2026-10-01T12:30:00Z")},
@@ -30,8 +29,9 @@ func TestParseDate(t *testing.T) {
 		{"2026-10-01T12:30:45.25Z", utc("2026-10-01T12:30:45.25Z")},
 		{"1790856000", utc("2026-10-01T12:00:00Z")},
 		{"0", utc("1970-01-01T00:00:00Z")},
-		// Five digits and up are epoch seconds; only four are a year.
-		{"20260", utc("1970-01-01T05:37:40Z")},
+		// AWS reads four digits as epoch seconds, not the W3C bare year.
+		{"2020", utc("1970-01-01T00:33:40Z")},
+		{"-100", utc("1969-12-31T23:58:20Z")},
 	}
 	for _, tt := range accepted {
 		t.Run(tt.value, func(t *testing.T) {
@@ -44,7 +44,7 @@ func TestParseDate(t *testing.T) {
 	rejected := []string{
 		"", "today", "2026-1-5", "2026-10-01T12Z", "2026-10-01T12:30",
 		"2026-10-01T12:30:45", "2026-10-01 12:30:45Z", "2026-13-01",
-		"-1790856000", "1790856000.5", "99999999999999999999",
+		"-", "--100", "1790856000.5", "99999999999999999999",
 		"${aws:CurrentTime}", "Thu, 01 Oct 2026 12:00:00 GMT",
 	}
 	for _, v := range rejected {

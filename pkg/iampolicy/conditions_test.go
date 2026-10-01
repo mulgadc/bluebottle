@@ -314,23 +314,23 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 		{"DateGreaterThanEquals before", iampolicy.OpDateGreaterThanEquals, iampolicy.KeyEpochTime,
 			[]string{"2026-10-01T12:00:01Z"}, iampolicy.ConditionKeys{iampolicy.KeyEpochTime: "1790856000"}, iampolicy.Deny},
 		{"DateLessThan values are ORed", iampolicy.OpDateLessThan, iampolicy.KeyCurrentTime,
-			[]string{"2020", "2027"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Allow},
+			[]string{"2020-01-01", "2027-01-01"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Allow},
 		// An unparseable value matches nothing, but does not stop the scan.
 		{"DateLessThan skips an unparseable value", iampolicy.OpDateLessThan, iampolicy.KeyCurrentTime,
-			[]string{"next week", "2027"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Allow},
+			[]string{"next week", "2027-01-01"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Allow},
 		{"DateLessThan unparseable value alone", iampolicy.OpDateLessThan, iampolicy.KeyCurrentTime,
 			[]string{"next week"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Deny},
 		// Policy variables are not supported with date operators: compared as written.
 		{"DateEquals does not expand a variable", iampolicy.OpDateEquals, iampolicy.KeyCurrentTime,
 			[]string{"${aws:CurrentTime}"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Deny},
 		{"DateLessThan absent key", iampolicy.OpDateLessThan, iampolicy.KeyCurrentTime,
-			[]string{"2027"}, nil, iampolicy.Deny},
+			[]string{"2027-01-01"}, nil, iampolicy.Deny},
 		{"DateNotEquals absent key", iampolicy.OpDateNotEquals, iampolicy.KeyCurrentTime,
-			[]string{"2027"}, nil, iampolicy.Allow},
+			[]string{"2027-01-01"}, nil, iampolicy.Allow},
 		{"DateGreaterThanIfExists absent key", iampolicy.OpDateGreaterThan + iampolicy.IfExistsSuffix, iampolicy.KeyCurrentTime,
-			[]string{"2027"}, nil, iampolicy.Allow},
+			[]string{"2027-01-01"}, nil, iampolicy.Allow},
 		{"DateGreaterThanIfExists present key", iampolicy.OpDateGreaterThan + iampolicy.IfExistsSuffix, iampolicy.KeyCurrentTime,
-			[]string{"2027"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Deny},
+			[]string{"2027-01-01"}, iampolicy.ConditionKeys{iampolicy.KeyCurrentTime: "2026-10-01T12:00:00Z"}, iampolicy.Deny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -532,9 +532,9 @@ func TestEvaluateWithKeys_IfExistsFailsClosedOnPresentKey(t *testing.T) {
 		{"unparseable request address under negation", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
 			"10.0.0.0/8", "10.4.1.9:54321"},
 		{"unparseable request date", iampolicy.OpDateLessThan, iampolicy.KeyCurrentTime,
-			"2027", "2026-10-01 12:00:00"},
+			"2027-01-01", "2026-10-01 12:00:00"},
 		{"unparseable request date under negation", iampolicy.OpDateNotEquals, iampolicy.KeyEpochTime,
-			"2027", "1790856000.5"},
+			"2027-01-01", "1790856000.5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
