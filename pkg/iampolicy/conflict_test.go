@@ -34,7 +34,7 @@ func sourceSlice(at map[string]iampolicy.Statement) []iampolicy.PolicyDocument {
 // unenforceableCondition names an operator outside the supported set, so any
 // statement carrying it takes the fail-closed path.
 var unenforceableCondition = map[string]map[string]iampolicy.ConditionValue{
-	"DateGreaterThan": {"aws:CurrentTime": {"2020-01-01T00:00:00Z"}},
+	"NumericLessThan": {"s3:max-keys": {"10"}},
 }
 
 func stmt(effect, action, resource string) iampolicy.Statement {

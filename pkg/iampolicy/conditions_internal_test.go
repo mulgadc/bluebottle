@@ -27,6 +27,12 @@ var matcherSamples = map[string]struct {
 	OpArnLike:                   {"arn:aws:iam::111122223333:role/ops", []string{"arn:aws:iam::*:role/ops"}},
 	OpArnNotEquals:              {"arn:aws:iam::111122223333:role/ops", []string{"arn:aws:iam::444455556666:role/*"}},
 	OpArnNotLike:                {"arn:aws:iam::111122223333:role/ops", []string{"arn:aws:s3:::*"}},
+	OpDateEquals:                {"2026-10-01T12:00:00Z", []string{"1790856000"}},
+	OpDateNotEquals:             {"2026-10-01T12:00:00Z", []string{"2026-10-01"}},
+	OpDateLessThan:              {"2026-10-01T12:00:00Z", []string{"2027"}},
+	OpDateLessThanEquals:        {"2026-10-01T12:00:00Z", []string{"2026-10-01T12:00Z"}},
+	OpDateGreaterThan:           {"1790856000", []string{"2026-10"}},
+	OpDateGreaterThanEquals:     {"1790856000", []string{"2026-10-01T14:00:00+02:00"}},
 }
 
 // Operators the matcher implements that no supported key can carry yet: none is

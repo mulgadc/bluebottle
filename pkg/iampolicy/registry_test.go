@@ -20,6 +20,8 @@ var allConditionKeys = []string{
 	iampolicy.KeyUserID,
 	iampolicy.KeyPrincipalType,
 	iampolicy.KeyPassedToService,
+	iampolicy.KeyCurrentTime,
+	iampolicy.KeyEpochTime,
 }
 
 // Every operator the package names. conditions_internal_test.go pins that the
@@ -40,6 +42,12 @@ var allOperators = []string{
 	iampolicy.OpArnNotEquals,
 	iampolicy.OpArnNotLike,
 	iampolicy.OpNull,
+	iampolicy.OpDateEquals,
+	iampolicy.OpDateNotEquals,
+	iampolicy.OpDateLessThan,
+	iampolicy.OpDateLessThanEquals,
+	iampolicy.OpDateGreaterThan,
+	iampolicy.OpDateGreaterThanEquals,
 }
 
 // Empty on purpose: every substitutable key is supplied by a door, so the gate
