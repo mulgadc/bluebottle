@@ -39,6 +39,7 @@ var allOperators = []string{
 	iampolicy.OpArnLike,
 	iampolicy.OpArnNotEquals,
 	iampolicy.OpArnNotLike,
+	iampolicy.OpNull,
 }
 
 // Empty on purpose: every substitutable key is supplied by a door, so the gate

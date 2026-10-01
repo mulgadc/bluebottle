@@ -106,6 +106,13 @@ func TestSupportedCondition(t *testing.T) {
 	// MFA is hard-dropped: spinifex has no MFA, so the key could never be true.
 	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpBool, "aws:MultiFactorAuthPresent"))
 	assert.False(t, iampolicy.SupportedCondition("DateGreaterThan", "aws:CurrentTime"))
+
+	assert.True(t, iampolicy.SupportedCondition(iampolicy.OpNull, iampolicy.KeyS3Prefix))
+	assert.True(t, iampolicy.SupportedCondition("StringLikeIfExists", iampolicy.KeyUserID))
+	assert.True(t, iampolicy.SupportedCondition("NotIpAddressIfExists", iampolicy.KeySourceIP))
+	assert.False(t, iampolicy.SupportedCondition("StringLikeIfExists", iampolicy.KeyUsername))
+	assert.False(t, iampolicy.SupportedCondition("NullIfExists", iampolicy.KeyUsername))
+	assert.False(t, iampolicy.SupportedCondition(iampolicy.OpNull, "aws:MultiFactorAuthPresent"))
 }
 
 // condDoc builds a single-statement Allow carrying one condition.
@@ -233,6 +240,41 @@ func TestEvaluateWithKeys_Operators(t *testing.T) {
 			[]string{"10.0.0.0/8"}, nil, iampolicy.Allow},
 		{"StringEqualsIgnoreCase absent key", iampolicy.OpStringEqualsIgnoreCase, iampolicy.KeyUsername,
 			[]string{"alice"}, nil, iampolicy.Deny},
+
+		// Null true holds on an absent key, false on a present one, and a present
+		// empty value is present.
+		{"Null true absent key", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"true"}, iampolicy.ConditionKeys{iampolicy.KeyUserID: "AROAOPS:deploy"}, iampolicy.Allow},
+		{"Null true present key", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"true"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Deny},
+		{"Null true present but empty", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"true"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: ""}, iampolicy.Deny},
+		{"Null false present key", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"false"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Allow},
+		{"Null false absent key", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"false"}, nil, iampolicy.Deny},
+		{"Null ignores case", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"TRUE"}, nil, iampolicy.Allow},
+		{"Null values are ORed", iampolicy.OpNull, iampolicy.KeyUsername,
+			[]string{"false", "true"}, nil, iampolicy.Allow},
+
+		// IfExists holds on an absent key and otherwise is its base operator.
+		{"StringEqualsIfExists absent key", iampolicy.OpStringEquals + iampolicy.IfExistsSuffix, iampolicy.KeyUsername,
+			[]string{"alice"}, nil, iampolicy.Allow},
+		{"StringEqualsIfExists match", iampolicy.OpStringEquals + iampolicy.IfExistsSuffix, iampolicy.KeyUsername,
+			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "alice"}, iampolicy.Allow},
+		{"StringEqualsIfExists mismatch", iampolicy.OpStringEquals + iampolicy.IfExistsSuffix, iampolicy.KeyUsername,
+			[]string{"alice"}, iampolicy.ConditionKeys{iampolicy.KeyUsername: "bob"}, iampolicy.Deny},
+		{"StringNotLikeIfExists absent key", iampolicy.OpStringNotLike + iampolicy.IfExistsSuffix, iampolicy.KeyS3Prefix,
+			[]string{"home/*"}, nil, iampolicy.Allow},
+		{"StringNotLikeIfExists inside the pattern", iampolicy.OpStringNotLike + iampolicy.IfExistsSuffix, iampolicy.KeyS3Prefix,
+			[]string{"home/*"}, iampolicy.ConditionKeys{iampolicy.KeyS3Prefix: "home/alice/"}, iampolicy.Deny},
+		{"IpAddressIfExists outside CIDR", iampolicy.OpIPAddress + iampolicy.IfExistsSuffix, iampolicy.KeySourceIP,
+			[]string{"10.0.0.0/8"}, iampolicy.ConditionKeys{iampolicy.KeySourceIP: "192.168.1.1"}, iampolicy.Deny},
+		{"BoolIfExists absent key", iampolicy.OpBool + iampolicy.IfExistsSuffix, iampolicy.KeySecureTransport,
+			[]string{"true"}, nil, iampolicy.Allow},
+		{"BoolIfExists mismatch", iampolicy.OpBool + iampolicy.IfExistsSuffix, iampolicy.KeySecureTransport,
+			[]string{"true"}, iampolicy.ConditionKeys{iampolicy.KeySecureTransport: "false"}, iampolicy.Deny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -413,6 +455,57 @@ func TestEvaluateWithKeys_NegatedOperatorFailsClosed(t *testing.T) {
 				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "the Deny must fire")
 		})
 	}
+}
+
+// IfExists only relaxes the absent case: input the base operator cannot resolve
+// on a present key still narrows access, an Allow not granting and a Deny firing.
+func TestEvaluateWithKeys_IfExistsFailsClosedOnPresentKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		op     string
+		key    string
+		value  string
+		actual string
+	}{
+		{"unresolvable variable", iampolicy.OpStringEquals, iampolicy.KeyS3Prefix,
+			"home/${aws:username}", "home/alice"},
+		{"unresolvable variable under negation", iampolicy.OpStringNotLike, iampolicy.KeyS3Prefix,
+			"home/${aws:username}/*", "home/alice/x"},
+		{"unparseable request address", iampolicy.OpIPAddress, iampolicy.KeySourceIP,
+			"10.0.0.0/8", "10.4.1.9:54321"},
+		{"unparseable request address under negation", iampolicy.OpNotIPAddress, iampolicy.KeySourceIP,
+			"10.0.0.0/8", "10.4.1.9:54321"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := tt.op + iampolicy.IfExistsSuffix
+			require.True(t, iampolicy.SupportedCondition(op, tt.key), "%s on %s", op, tt.key)
+			keys := iampolicy.ConditionKeys{tt.key: tt.actual}
+
+			allow := condDoc(op, tt.key, tt.value)
+			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+				[]iampolicy.PolicyDocument{allow}, keys), "the Allow must not grant")
+
+			deny := condDoc(op, tt.key, tt.value)
+			deny.Statement[0].Effect = iampolicy.EffectDeny
+			assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+				[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, keys), "the Deny must fire")
+		})
+	}
+}
+
+// NullIfExists is not an operator, so a statement carrying it is unenforceable
+// and fails closed rather than being read as Null.
+func TestEvaluateWithKeys_NullIfExistsFailsClosed(t *testing.T) {
+	op := iampolicy.OpNull + iampolicy.IfExistsSuffix
+	allow := condDoc(op, iampolicy.KeyUsername, "true")
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+		[]iampolicy.PolicyDocument{allow}, nil))
+
+	deny := condDoc(op, iampolicy.KeyUsername, "false")
+	deny.Statement[0].Effect = iampolicy.EffectDeny
+	assert.Equal(t, iampolicy.Deny, iampolicy.EvaluateWithKeys("s3:GetObject", "arn:aws:s3:::b/k",
+		[]iampolicy.PolicyDocument{doc("Allow", "s3:*", "*"), deny}, nil))
 }
 
 // A reference the evaluator does not support makes a condition non-matching,

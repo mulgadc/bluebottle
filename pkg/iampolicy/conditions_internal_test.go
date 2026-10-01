@@ -87,6 +87,22 @@ func TestNegatedOperators_MirrorTheirPositiveForm(t *testing.T) {
 	}
 }
 
+// Every IfExists form is advertised on exactly the keys its base operator is,
+// and Null on every registered key but never in an IfExists form.
+func TestIfExistsAndNull_FollowTheRegistry(t *testing.T) {
+	for key := range supportedConditions {
+		for op := range matcherSamples {
+			assert.Equal(t, SupportedCondition(op, key), SupportedCondition(op+IfExistsSuffix, key),
+				"%q and %q are advertised differently on %q", op, op+IfExistsSuffix, key)
+		}
+		assert.True(t, SupportedCondition(OpNull, key), "Null is not advertised on registered key %q", key)
+		assert.False(t, SupportedCondition(OpNull+IfExistsSuffix, key), "NullIfExists is advertised on %q", key)
+		assert.False(t, SupportedCondition(IfExistsSuffix, key), "a bare IfExists is advertised on %q", key)
+		assert.False(t, SupportedCondition(OpStringEquals+IfExistsSuffix+IfExistsSuffix, key),
+			"a doubled suffix is advertised on %q", key)
+	}
+}
+
 func TestMatchARN(t *testing.T) {
 	const role = "arn:aws:iam::111122223333:role/ops"
 	tests := []struct {
