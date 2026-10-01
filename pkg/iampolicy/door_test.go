@@ -328,6 +328,74 @@ func doorCases() []doorCase {
 			want: everywhere(grants, map[string]outcome{"aws-gateway/passrole": inert}),
 		},
 		{
+			// Role sessions carry no aws:username at either door.
+			name: "aws:username Null true",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNull, iampolicy.KeyUsername, "true")},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
+		},
+		{
+			name: "aws:username Null false",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNull, iampolicy.KeyUsername, "false")},
+			want: everywhere(grants, map[string]outcome{
+				"aws-gateway/assumed-role": inert,
+				"s3-gate/role-session":     inert,
+			}),
+		},
+		{
+			name: "s3:prefix Null false",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNull, iampolicy.KeyS3Prefix, "false")},
+			want: everywhere(inert, map[string]outcome{"s3-gate/user-listing": grants}),
+		},
+		{
+			// Holds where the key is absent and compares where it is present, so
+			// the role sessions and the user doors both grant.
+			name: "aws:username StringEqualsIfExists the user",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals+iampolicy.IfExistsSuffix,
+				iampolicy.KeyUsername, doorUser)},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "aws:username StringEqualsIfExists another user",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals+iampolicy.IfExistsSuffix,
+				iampolicy.KeyUsername, "bob")},
+			want: everywhere(inert, map[string]outcome{
+				"aws-gateway/assumed-role": grants,
+				"s3-gate/role-session":     grants,
+			}),
+		},
+		{
+			name: "s3:prefix StringLikeIfExists another prefix",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringLike+iampolicy.IfExistsSuffix,
+				iampolicy.KeyS3Prefix, "logs/*")},
+			want: everywhere(grants, map[string]outcome{"s3-gate/user-listing": inert}),
+		},
+		{
+			// Every door supplies the key, so the suffix changes nothing.
+			name: "aws:SecureTransport BoolIfExists",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpBool+iampolicy.IfExistsSuffix,
+				iampolicy.KeySecureTransport, "true")},
+			want: everywhere(grants, map[string]outcome{"s3-gate/user-object-plaintext": inert}),
+		},
+		{
+			name: "iam:PassedToService StringNotEqualsIfExists the consuming service",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotEquals+iampolicy.IfExistsSuffix,
+				iampolicy.KeyPassedToService, doorPassedTo)},
+			want: everywhere(grants, map[string]outcome{"aws-gateway/passrole": inert}),
+		},
+		{
+			// The key is present everywhere, so the suffix cannot rescue the
+			// unresolvable value from failing closed.
+			name: "unresolvable variable under IfExists",
+			stmt: iampolicy.Statement{
+				Condition: cond(iampolicy.OpStringEquals+iampolicy.IfExistsSuffix, iampolicy.KeyPrincipalAccount,
+					"${aws:MultiFactorAuthPresent}"),
+			},
+			want: everywhere(failsClosed, nil),
+		},
+		{
 			name: "NotAction excluding another action",
 			stmt: iampolicy.Statement{NotAction: iampolicy.StringOrArr{"s3:DeleteObject"}},
 			want: everywhere(grants, nil),

@@ -45,7 +45,12 @@ const (
 	OpArnLike                   = "ArnLike"
 	OpArnNotEquals              = "ArnNotEquals"
 	OpArnNotLike                = "ArnNotLike"
+	OpNull                      = "Null"
 )
+
+// IfExistsSuffix turns any operator but Null into one that holds on a key absent
+// from the request context and otherwise evaluates as its base operator.
+const IfExistsSuffix = "IfExists"
 
 // negatedOperators maps each negated operator to the positive form it inverts.
 // Per AWS, a negated operator holds on a key absent from the request context.
@@ -101,13 +106,27 @@ var supportedConditions = map[string]map[string]bool{
 // SupportedCondition reports whether the evaluator enforces operator on key.
 // Write paths gate on this so the front door never accepts a condition the
 // evaluator would fail closed on.
+//
+// An IfExists form is supported exactly where its base operator is, and Null on
+// every registered key, so neither needs entries of its own that could drift.
 func SupportedCondition(operator, key string) bool {
-	return supportedConditions[key][operator]
+	base, ifExists := BaseOperator(operator)
+	if base == OpNull {
+		_, registered := supportedConditions[key]
+		return registered && !ifExists
+	}
+	return supportedConditions[key][base]
+}
+
+// BaseOperator strips the IfExists suffix from operator, reporting whether it
+// was there. The evaluator and write paths read every operator through it.
+func BaseOperator(operator string) (base string, ifExists bool) {
+	return strings.CutSuffix(operator, IfExistsSuffix)
 }
 
 // ConditionKeys carries the condition context keys resolved for one request. An
-// absent key evaluates its condition false, or true under a negated operator, so
-// absent must stay distinguishable from present-but-empty.
+// absent key evaluates its condition false, or true under a negated, IfExists or
+// Null-true operator, so absent must stay distinguishable from present-but-empty.
 type ConditionKeys map[string]string
 
 // conditionsHold reports whether every condition block on the statement is
@@ -115,19 +134,26 @@ type ConditionKeys map[string]string
 //
 // A value carrying a policy variable this door cannot resolve takes failClosed,
 // so a Deny survives one rather than disappearing. An absent key holds only
-// under a negated operator, so omitting it cannot stop a negated Deny firing.
+// under a negated or IfExists operator, so omitting it cannot stop either firing.
 func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 	for op, byKey := range s.Condition {
-		_, negated := negatedOperators[op]
+		base, ifExists := BaseOperator(op)
+		_, negated := negatedOperators[base]
 		for key, values := range byKey {
 			actual, present := keys[key]
+			if base == OpNull {
+				if !nullHolds(present, values) {
+					return false
+				}
+				continue
+			}
 			if !present {
-				if negated {
+				if negated || ifExists {
 					continue
 				}
 				return false
 			}
-			if !conditionHolds(op, actual, values, keys, failClosed) {
+			if !conditionHolds(base, actual, values, keys, failClosed) {
 				return false
 			}
 		}
@@ -173,6 +199,17 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		}
 	case OpIPAddress:
 		return ipInAny(actual, values, failClosed)
+	}
+	return false
+}
+
+// nullHolds applies Null: true holds on an absent key, false on a present one,
+// and values are ORed. Anything else matches nothing; write paths reject it.
+func nullHolds(present bool, values []string) bool {
+	for _, v := range values {
+		if (strings.EqualFold(v, "true") && !present) || (strings.EqualFold(v, "false") && present) {
+			return true
+		}
 	}
 	return false
 }
