@@ -29,7 +29,8 @@ func ParseNumber(s string) (Number, error) {
 	}
 	mantissa, exponent, hasExp := strings.Cut(strings.ReplaceAll(s, "E", "e"), "e")
 	whole, frac, _ := strings.Cut(mantissa, ".")
-	if whole+frac == "" || !digitsOnly(whole) || !digitsOnly(frac) {
+	mant := whole + frac
+	if !allDigits(mant) {
 		return Number{}, errNotANumber
 	}
 	var exp int64
@@ -48,7 +49,7 @@ func ParseNumber(s string) (Number, error) {
 		return Number{}, errNotANumber
 	}
 
-	digits := strings.TrimLeft(whole+frac, "0")
+	digits := strings.TrimLeft(mant, "0")
 	trimmed := strings.TrimRight(digits, "0")
 	if trimmed == "" {
 		return Number{}, nil
@@ -56,11 +57,6 @@ func ParseNumber(s string) (Number, error) {
 	n.digits = trimmed
 	n.exp = int64(len(digits)-len(trimmed)) - scale
 	return n, nil
-}
-
-// digitsOnly reports whether s is ASCII digits, the empty string included.
-func digitsOnly(s string) bool {
-	return s == "" || allDigits(s)
 }
 
 // Compare returns -1, 0 or 1 as n is less than, equal to or greater than o.
