@@ -107,21 +107,11 @@ func ResolveInstanceProfileARN(profileARN string, lookup ARNLookup) (accountID, 
 	return resolveIAMARN(profileARN, "instance-profile", lookup, ErrInvalidInstanceProfileARN, ErrInstanceProfileARNMismatch)
 }
 
-// ParsePolicyARN extracts the account ID and policy name from an IAM policy ARN
-// of the form arn:aws:iam::<accountID>:policy/<path>/<name> (path optional),
-// failing closed like ParseRoleARN. An AWS-managed ARN parses with accountID
-// "aws". It discards the path; to resolve a caller-supplied ARN, use ResolvePolicyARN.
+// ParsePolicyARN extracts the account ID and name from arn:aws:iam::<account>:policy/<path>/<name>,
+// failing closed like ParseRoleARN; an AWS-managed ARN has accountID "aws". It
+// discards the path, so resolve a caller-supplied ARN with ResolvePolicyARN.
 func ParsePolicyARN(arn string) (accountID, name string, err error) {
 	return parseIAMARN(arn, "policy")
-}
-
-// ParseInstanceProfileARN extracts the account ID and profile name from an IAM
-// instance-profile ARN of the form
-// arn:aws:iam::<accountID>:instance-profile/<path>/<name> (path optional),
-// failing closed like ParseRoleARN. It discards the path; to resolve a
-// caller-supplied ARN to a stored profile, use ResolveInstanceProfileARN.
-func ParseInstanceProfileARN(arn string) (accountID, name string, err error) {
-	return parseIAMARN(arn, "instance-profile")
 }
 
 // IsAWSManagedPolicyARN reports whether arn is a structurally valid AWS-managed

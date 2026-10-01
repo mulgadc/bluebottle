@@ -226,6 +226,18 @@ func TestResolvePolicyAndInstanceProfileARN(t *testing.T) {
 				require.ErrorIs(t, err, r.errInvalid)
 				assert.False(t, called, "lookup must not run for a malformed ARN")
 			})
+
+			t.Run("an empty stored ARN never matches", func(t *testing.T) {
+				_, _, err := r.resolve(arn("Ghost"), func(_, _ string) (string, error) { return "", nil })
+				require.ErrorIs(t, err, r.errMismatch)
+			})
+
+			t.Run("a lookup error passes through", func(t *testing.T) {
+				sentinel := errors.New("kv unavailable")
+				_, _, err := r.resolve(arn("Admin"), func(_, _ string) (string, error) { return "", sentinel })
+				require.ErrorIs(t, err, sentinel)
+				assert.NotErrorIs(t, err, r.errMismatch)
+			})
 		})
 	}
 }
