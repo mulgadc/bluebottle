@@ -26,6 +26,9 @@ const (
 	doorSessionID = "AROASHAREDOPS:session"
 	// The service an iam:PassRole check hands the role to.
 	doorPassedTo = "ec2.amazonaws.com"
+	// One request instant, spelled as SetRequestTime spells it at both doors.
+	doorCurrentTime = "2026-10-01T12:00:00Z"
+	doorEpochTime   = "1790856000"
 )
 
 type door struct {
@@ -36,6 +39,8 @@ type door struct {
 var doors = []door{
 	{"aws-gateway/user", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUsername:         doorUser,
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
@@ -47,6 +52,8 @@ var doors = []door{
 	// supplied, because STS mints it from the resolved role.
 	{"aws-gateway/assumed-role", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         gatewayIP,
@@ -56,6 +63,8 @@ var doors = []door{
 	// consuming service. No other action at either door supplies it.
 	{"aws-gateway/passrole", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUsername:         doorUser,
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
@@ -65,6 +74,8 @@ var doors = []door{
 	}},
 	{"s3-gate/user-listing", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUsername:         doorUser,
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
@@ -74,6 +85,8 @@ var doors = []door{
 	}},
 	{"s3-gate/user-object", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUsername:         doorUser,
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
@@ -82,6 +95,8 @@ var doors = []door{
 	}},
 	{"s3-gate/role-session", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUserID:           doorSessionID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
@@ -89,6 +104,8 @@ var doors = []door{
 	}},
 	{"s3-gate/user-object-plaintext", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "false",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
 		iampolicy.KeyUsername:         doorUser,
 		iampolicy.KeyUserID:           doorUserID,
 		iampolicy.KeyPrincipalAccount: doorAccount,
@@ -394,6 +411,37 @@ func doorCases() []doorCase {
 					"${aws:MultiFactorAuthPresent}"),
 			},
 			want: everywhere(failsClosed, nil),
+		},
+		{
+			// A time-boxed Deny: every door supplies the request time, so it fires
+			// everywhere once the given time has passed.
+			name: "aws:CurrentTime DateGreaterThan an earlier time",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateGreaterThan, iampolicy.KeyCurrentTime,
+				"2026-09-30T00:00:00Z")},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "aws:CurrentTime DateGreaterThan a later time",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateGreaterThan, iampolicy.KeyCurrentTime,
+				"2026-10-01T12:00:01Z")},
+			want: everywhere(inert, nil),
+		},
+		{
+			// Either key takes either spelling of the value.
+			name: "aws:EpochTime DateLessThan an ISO 8601 time",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateLessThan, iampolicy.KeyEpochTime,
+				"2026-10-02")},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "aws:CurrentTime DateEquals the request time in epoch seconds",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateEquals, iampolicy.KeyCurrentTime, doorEpochTime)},
+			want: everywhere(grants, nil),
+		},
+		{
+			name: "aws:EpochTime DateNotEquals the request time",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateNotEquals, iampolicy.KeyEpochTime, doorCurrentTime)},
+			want: everywhere(inert, nil),
 		},
 		{
 			name: "NotAction excluding another action",

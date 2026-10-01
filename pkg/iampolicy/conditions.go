@@ -8,6 +8,7 @@ import (
 
 // Condition context keys understood by the evaluator. Only the S3 data plane
 // supplies KeyS3Prefix, and only an iam:PassRole check supplies KeyPassedToService.
+// Every door supplies KeyCurrentTime and KeyEpochTime through SetRequestTime.
 const (
 	KeySourceIP         = "aws:SourceIp"
 	KeyS3Prefix         = "s3:prefix"
@@ -17,6 +18,8 @@ const (
 	KeyUserID           = "aws:userid"
 	KeyPrincipalType    = "aws:PrincipalType"
 	KeyPassedToService  = "iam:PassedToService"
+	KeyCurrentTime      = "aws:CurrentTime"
+	KeyEpochTime        = "aws:EpochTime"
 )
 
 // Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
@@ -46,6 +49,12 @@ const (
 	OpArnNotEquals              = "ArnNotEquals"
 	OpArnNotLike                = "ArnNotLike"
 	OpNull                      = "Null"
+	OpDateEquals                = "DateEquals"
+	OpDateNotEquals             = "DateNotEquals"
+	OpDateLessThan              = "DateLessThan"
+	OpDateLessThanEquals        = "DateLessThanEquals"
+	OpDateGreaterThan           = "DateGreaterThan"
+	OpDateGreaterThanEquals     = "DateGreaterThanEquals"
 )
 
 // IfExistsSuffix turns any operator but Null into one that holds on a key absent
@@ -61,6 +70,7 @@ var negatedOperators = map[string]string{
 	OpNotIPAddress:              OpIPAddress,
 	OpArnNotEquals:              OpArnEquals,
 	OpArnNotLike:                OpArnLike,
+	OpDateNotEquals:             OpDateEquals,
 }
 
 // Operator sets for the registry below. Each string key carries the negated and
@@ -69,6 +79,10 @@ var negatedOperators = map[string]string{
 var (
 	stringEqualsOps = []string{OpStringEquals, OpStringNotEquals, OpStringEqualsIgnoreCase, OpStringNotEqualsIgnoreCase}
 	stringLikeOps   = []string{OpStringLike, OpStringNotLike}
+	dateOps         = []string{
+		OpDateEquals, OpDateNotEquals, OpDateLessThan, OpDateLessThanEquals,
+		OpDateGreaterThan, OpDateGreaterThanEquals,
+	}
 )
 
 func operators(sets ...[]string) map[string]bool {
@@ -101,6 +115,9 @@ var supportedConditions = map[string]map[string]bool{
 	// Fixed by the service performing the PassRole check, never read from the
 	// request, and absent on every other action.
 	KeyPassedToService: operators(stringEqualsOps, stringLikeOps),
+	// Read from the server clock at each door, never from the request.
+	KeyCurrentTime: operators(dateOps),
+	KeyEpochTime:   operators(dateOps),
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.
@@ -164,8 +181,8 @@ func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 // conditionHolds applies one operator to the request's value for a key. An
 // unrecognized operator returns false; callers reject those before reaching here.
 //
-// keys resolves policy variables in the string and ARN operators' values. Bool
-// and IpAddress values are compared as written, a variable in either having no
+// keys resolves policy variables in the string and ARN operators' values. Bool,
+// IpAddress and date values are compared as written, a variable in any having no
 // meaning. A value carrying an unresolvable reference takes failClosed.
 func conditionHolds(operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
 	// Inverting failClosed inside the match keeps an unresolvable value narrowing
@@ -199,6 +216,8 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		}
 	case OpIPAddress:
 		return ipInAny(actual, values, failClosed)
+	case OpDateEquals, OpDateLessThan, OpDateLessThanEquals, OpDateGreaterThan, OpDateGreaterThanEquals:
+		return dateHoldsAny(operator, actual, values, failClosed)
 	}
 	return false
 }
