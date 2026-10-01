@@ -117,3 +117,59 @@ func matchesAnyResource(patterns []string, resource string, keys ConditionKeys, 
 	}
 	return false
 }
+
+// arnComponents is the number of colon-delimited components in an ARN. The last
+// is the resource, which runs to the end and may itself contain colons.
+const arnComponents = 6
+
+// SplitARN splits an ARN or ARN pattern into its six components, reporting
+// false when it has fewer. Colons inside a ${...} reference do not split, so a
+// variable such as ${aws:userid} stays whole within its component.
+func SplitARN(s string) ([]string, bool) {
+	parts := make([]string, 0, arnComponents)
+	start, inVariable := 0, false
+	for i := 0; i < len(s) && len(parts) < arnComponents-1; i++ {
+		switch {
+		case strings.HasPrefix(s[i:], VariablePrefix):
+			inVariable = true
+			i++
+		case inVariable && s[i] == '}':
+			inVariable = false
+		case !inVariable && s[i] == ':':
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	if len(parts) < arnComponents-1 {
+		return nil, false
+	}
+	return append(parts, s[start:]), true
+}
+
+// matchARN reports whether pattern matches the ARN value component by component,
+// as AWS's ArnLike does, so a wildcard cannot cross a colon outside the resource
+// component. A reference this door cannot resolve takes failClosed.
+func matchARN(pattern, value string, keys ConditionKeys, failClosed bool) bool {
+	if _, result := expandVariables(pattern, keys, true); result == expansionUnresolvable {
+		slog.Debug("iampolicy: policy variable is unresolvable at this door",
+			"pattern", pattern, "matches", failClosed)
+		return failClosed
+	}
+	patternParts, ok := SplitARN(pattern)
+	if !ok {
+		return false
+	}
+	// The value is a resolved ARN, so a plain split is exact. One that is not an
+	// ARN is input this door cannot match, so it takes failClosed.
+	valueParts := strings.SplitN(value, ":", arnComponents)
+	if len(valueParts) < arnComponents {
+		slog.Warn("iampolicy: request value is not an ARN", "value", value, "matches", failClosed)
+		return failClosed
+	}
+	for i := range patternParts {
+		if !matchPattern(patternParts[i], valueParts[i], keys, failClosed) {
+			return false
+		}
+	}
+	return true
+}
