@@ -29,6 +29,8 @@ const (
 	// One request instant, spelled as SetRequestTime spells it at both doors.
 	doorCurrentTime = "2026-10-01T12:00:00Z"
 	doorEpochTime   = "1790856000"
+	// The page size a listing asked for.
+	doorMaxKeys = "100"
 )
 
 type door struct {
@@ -81,6 +83,7 @@ var doors = []door{
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 		iampolicy.KeyS3Prefix:         "home/",
+		iampolicy.KeyS3MaxKeys:        doorMaxKeys,
 		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 	}},
 	{"s3-gate/user-object", iampolicy.ConditionKeys{
@@ -442,6 +445,29 @@ func doorCases() []doorCase {
 			name: "aws:EpochTime DateNotEquals the request time",
 			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpDateNotEquals, iampolicy.KeyEpochTime, doorCurrentTime)},
 			want: everywhere(inert, nil),
+		},
+		{
+			// A page-size cap: only a listing that names a page size carries the
+			// key, so the Deny fires there and is inert everywhere else.
+			name: "s3:max-keys NumericGreaterThan a smaller limit",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNumericGreaterThan, iampolicy.KeyS3MaxKeys, "50")},
+			want: everywhere(inert, map[string]outcome{"s3-gate/user-listing": grants}),
+		},
+		{
+			name: "s3:max-keys NumericGreaterThan a larger limit",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNumericGreaterThan, iampolicy.KeyS3MaxKeys, "1000")},
+			want: everywhere(inert, nil),
+		},
+		{
+			// Negated, so it holds wherever the key is absent.
+			name: "s3:max-keys NumericNotEquals the requested page size",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNumericNotEquals, iampolicy.KeyS3MaxKeys, doorMaxKeys)},
+			want: everywhere(grants, map[string]outcome{"s3-gate/user-listing": inert}),
+		},
+		{
+			name: "aws:EpochTime NumericLessThan a later second",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpNumericLessThan, iampolicy.KeyEpochTime, "1790856001")},
+			want: everywhere(grants, nil),
 		},
 		{
 			name: "NotAction excluding another action",

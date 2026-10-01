@@ -33,6 +33,12 @@ var matcherSamples = map[string]struct {
 	OpDateLessThanEquals:        {"2026-10-01T12:00:00Z", []string{"2026-10-01T12:00Z"}},
 	OpDateGreaterThan:           {"1790856000", []string{"2026-10"}},
 	OpDateGreaterThanEquals:     {"1790856000", []string{"2026-10-01T14:00:00+02:00"}},
+	OpNumericEquals:             {"10", []string{"1e1"}},
+	OpNumericNotEquals:          {"10", []string{"10.5"}},
+	OpNumericLessThan:           {"10", []string{"10.5"}},
+	OpNumericLessThanEquals:     {"10", []string{"10.0"}},
+	OpNumericGreaterThan:        {"1000", []string{"999"}},
+	OpNumericGreaterThanEquals:  {"1000", []string{"+1000"}},
 }
 
 // Operators the matcher implements that no supported key can carry yet: none is

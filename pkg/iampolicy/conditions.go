@@ -7,11 +7,13 @@ import (
 )
 
 // Condition context keys understood by the evaluator. Only the S3 data plane
-// supplies KeyS3Prefix, and only an iam:PassRole check supplies KeyPassedToService.
+// supplies KeyS3Prefix and KeyS3MaxKeys, and only an iam:PassRole check supplies
+// KeyPassedToService.
 // Every door supplies KeyCurrentTime and KeyEpochTime through SetRequestTime.
 const (
 	KeySourceIP         = "aws:SourceIp"
 	KeyS3Prefix         = "s3:prefix"
+	KeyS3MaxKeys        = "s3:max-keys"
 	KeySecureTransport  = "aws:SecureTransport"
 	KeyUsername         = "aws:username"
 	KeyPrincipalAccount = "aws:PrincipalAccount"
@@ -55,6 +57,12 @@ const (
 	OpDateLessThanEquals        = "DateLessThanEquals"
 	OpDateGreaterThan           = "DateGreaterThan"
 	OpDateGreaterThanEquals     = "DateGreaterThanEquals"
+	OpNumericEquals             = "NumericEquals"
+	OpNumericNotEquals          = "NumericNotEquals"
+	OpNumericLessThan           = "NumericLessThan"
+	OpNumericLessThanEquals     = "NumericLessThanEquals"
+	OpNumericGreaterThan        = "NumericGreaterThan"
+	OpNumericGreaterThanEquals  = "NumericGreaterThanEquals"
 )
 
 // IfExistsSuffix turns any operator but Null into one that holds on a key absent
@@ -71,6 +79,7 @@ var negatedOperators = map[string]string{
 	OpArnNotEquals:              OpArnEquals,
 	OpArnNotLike:                OpArnLike,
 	OpDateNotEquals:             OpDateEquals,
+	OpNumericNotEquals:          OpNumericEquals,
 }
 
 // Operator sets for the registry below. Each string key carries the negated and
@@ -82,6 +91,10 @@ var (
 	dateOps         = []string{
 		OpDateEquals, OpDateNotEquals, OpDateLessThan, OpDateLessThanEquals,
 		OpDateGreaterThan, OpDateGreaterThanEquals,
+	}
+	numericOps = []string{
+		OpNumericEquals, OpNumericNotEquals, OpNumericLessThan, OpNumericLessThanEquals,
+		OpNumericGreaterThan, OpNumericGreaterThanEquals,
 	}
 )
 
@@ -97,10 +110,12 @@ func operators(sets ...[]string) map[string]bool {
 
 // aws:MultiFactorAuthPresent is deliberately absent: there is no MFA anywhere in
 // the stack, so the key could never be true and accepting it would mint a grant
-// that silently never fires.
+// that silently never fires. aws:MultiFactorAuthAge is absent for the same reason.
 var supportedConditions = map[string]map[string]bool{
-	KeySourceIP:         {OpIPAddress: true, OpNotIPAddress: true},
-	KeyS3Prefix:         operators(stringEqualsOps, stringLikeOps),
+	KeySourceIP: {OpIPAddress: true, OpNotIPAddress: true},
+	KeyS3Prefix: operators(stringEqualsOps, stringLikeOps),
+	// The client's page size, unclamped, and only on a listing that names one.
+	KeyS3MaxKeys:        operators(numericOps),
 	KeySecureTransport:  {OpBool: true},
 	KeyUsername:         operators(stringEqualsOps),
 	KeyPrincipalAccount: operators(stringEqualsOps),
@@ -117,7 +132,7 @@ var supportedConditions = map[string]map[string]bool{
 	KeyPassedToService: operators(stringEqualsOps, stringLikeOps),
 	// Read from the server clock at each door, never from the request.
 	KeyCurrentTime: operators(dateOps),
-	KeyEpochTime:   operators(dateOps),
+	KeyEpochTime:   operators(dateOps, numericOps),
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.
@@ -182,8 +197,8 @@ func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 // unrecognized operator returns false; callers reject those before reaching here.
 //
 // keys resolves policy variables in the string and ARN operators' values. Bool,
-// IpAddress and date values are compared as written, a variable in any having no
-// meaning. A value carrying an unresolvable reference takes failClosed.
+// IpAddress, date and numeric values are compared as written, a variable in any
+// having no meaning. A value carrying an unresolvable reference takes failClosed.
 func conditionHolds(operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
 	// Inverting failClosed inside the match keeps an unresolvable value narrowing
 	// access after the negation, as NotResource does.
@@ -218,6 +233,8 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 		return ipInAny(actual, values, failClosed)
 	case OpDateEquals, OpDateLessThan, OpDateLessThanEquals, OpDateGreaterThan, OpDateGreaterThanEquals:
 		return dateHoldsAny(operator, actual, values, failClosed)
+	case OpNumericEquals, OpNumericLessThan, OpNumericLessThanEquals, OpNumericGreaterThan, OpNumericGreaterThanEquals:
+		return numericHoldsAny(operator, actual, values, failClosed)
 	}
 	return false
 }
