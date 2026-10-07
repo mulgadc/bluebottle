@@ -1,3 +1,5 @@
+// Package auth parses and resolves IAM ARNs for roles, policies and instance
+// profiles, failing closed on any malformed or mismatched ARN.
 package auth
 
 import (

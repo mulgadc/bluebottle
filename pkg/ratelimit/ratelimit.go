@@ -1,3 +1,5 @@
+// Package ratelimit throttles HTTP requests with per-key token buckets, keyed by
+// account and action, and garbage-collects limiters that have gone idle.
 package ratelimit
 
 import (

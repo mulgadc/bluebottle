@@ -1,3 +1,5 @@
+// Package sigv4 parses and verifies AWS Signature Version 4 requests, including
+// presigned URLs and the unsigned and streaming payload modes S3 allows.
 package sigv4
 
 import (
