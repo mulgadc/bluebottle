@@ -10,7 +10,6 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace/noop"
 
-	loggerglobal "go.opentelemetry.io/otel/log/global"
 	lognoop "go.opentelemetry.io/otel/log/noop"
 )
 
@@ -112,8 +111,8 @@ func TestWithoutTracingInstallsNoTracerOrPropagator(t *testing.T) {
 			otel.GetTextMapPropagator().Fields())
 	}
 	// Logs and metrics must still be wired: WithoutTracing drops tracing only.
-	if _, ok := loggerglobal.GetLoggerProvider().(*sdklog.LoggerProvider); !ok {
-		t.Errorf("expected a real sdk/log LoggerProvider, got %T", loggerglobal.GetLoggerProvider())
+	if _, ok := otel.GetLoggerProvider().(*sdklog.LoggerProvider); !ok {
+		t.Errorf("expected a real sdk/log LoggerProvider, got %T", otel.GetLoggerProvider())
 	}
 }
 
@@ -208,10 +207,10 @@ func TestDeploymentEnvFallback(t *testing.T) {
 func TestInitWithoutEndpointInstallsNoLoggerProvider(t *testing.T) {
 	clearEndpointEnv(t)
 
-	prevLP := loggerglobal.GetLoggerProvider()
-	defer loggerglobal.SetLoggerProvider(prevLP)
+	prevLP := otel.GetLoggerProvider()
+	defer otel.SetLoggerProvider(prevLP)
 	sentinelLP := lognoop.NewLoggerProvider()
-	loggerglobal.SetLoggerProvider(sentinelLP)
+	otel.SetLoggerProvider(sentinelLP)
 
 	shutdown, err := Init(context.Background(), "test-svc")
 	if err != nil {
@@ -219,8 +218,8 @@ func TestInitWithoutEndpointInstallsNoLoggerProvider(t *testing.T) {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
-	if _, ok := loggerglobal.GetLoggerProvider().(lognoop.LoggerProvider); !ok {
-		t.Errorf("expected global LoggerProvider to remain the noop sentinel, got %T", loggerglobal.GetLoggerProvider())
+	if _, ok := otel.GetLoggerProvider().(lognoop.LoggerProvider); !ok {
+		t.Errorf("expected global LoggerProvider to remain the noop sentinel, got %T", otel.GetLoggerProvider())
 	}
 }
 
@@ -228,8 +227,8 @@ func TestInitWithoutEndpointInstallsNoLoggerProvider(t *testing.T) {
 // installs a real sdk/log LoggerProvider once an OTLP endpoint is configured.
 func TestInitWithEndpointInstallsLoggerProvider(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
-	prevLP := loggerglobal.GetLoggerProvider()
-	defer loggerglobal.SetLoggerProvider(prevLP)
+	prevLP := otel.GetLoggerProvider()
+	defer otel.SetLoggerProvider(prevLP)
 	prevTracer := otel.GetTracerProvider()
 	prevMeter := otel.GetMeterProvider()
 	defer otel.SetTracerProvider(prevTracer)
@@ -240,8 +239,8 @@ func TestInitWithEndpointInstallsLoggerProvider(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	if _, ok := loggerglobal.GetLoggerProvider().(*sdklog.LoggerProvider); !ok {
-		t.Errorf("expected a real sdk/log LoggerProvider, got %T", loggerglobal.GetLoggerProvider())
+	if _, ok := otel.GetLoggerProvider().(*sdklog.LoggerProvider); !ok {
+		t.Errorf("expected a real sdk/log LoggerProvider, got %T", otel.GetLoggerProvider())
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

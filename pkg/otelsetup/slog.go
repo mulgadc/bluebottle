@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
-	loggerglobal "go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -107,7 +107,7 @@ func newHandler(conf *loggerConfig, level slog.Leveler) slog.Handler {
 		Level: level,
 	}))
 
-	lp, ok := loggerglobal.GetLoggerProvider().(*sdklog.LoggerProvider)
+	lp, ok := otel.GetLoggerProvider().(*sdklog.LoggerProvider)
 	if !ok {
 		return out
 	}

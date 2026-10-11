@@ -24,7 +24,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	loggerglobal "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -130,7 +129,7 @@ func Init(ctx context.Context, serviceName string, opts ...Option) (func(context
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(newUTF8Processor(sdklog.NewBatchProcessor(logExp))),
 	)
-	loggerglobal.SetLoggerProvider(lp)
+	otel.SetLoggerProvider(lp)
 	installed = append(installed, lp.Shutdown)
 
 	if cfg.runtimeMetrics {

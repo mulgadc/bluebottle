@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 
-	loggerglobal "go.opentelemetry.io/otel/log/global"
 	lognoop "go.opentelemetry.io/otel/log/noop"
 )
 
@@ -45,10 +45,10 @@ func installRecordingProvider(t *testing.T, opts ...sdklog.LoggerProviderOption)
 	lp := sdklog.NewLoggerProvider(
 		append(opts, sdklog.WithProcessor(sdklog.NewSimpleProcessor(exp)))...)
 
-	prevLP := loggerglobal.GetLoggerProvider()
-	loggerglobal.SetLoggerProvider(lp)
+	prevLP := otel.GetLoggerProvider()
+	otel.SetLoggerProvider(lp)
 	t.Cleanup(func() {
-		loggerglobal.SetLoggerProvider(prevLP)
+		otel.SetLoggerProvider(prevLP)
 		_ = lp.Shutdown(context.Background())
 	})
 	return exp
@@ -58,9 +58,9 @@ func installRecordingProvider(t *testing.T, opts ...sdklog.LoggerProviderOption)
 // left behind when Init runs with no OTLP endpoint configured.
 func installNoopProvider(t *testing.T) {
 	t.Helper()
-	prevLP := loggerglobal.GetLoggerProvider()
-	loggerglobal.SetLoggerProvider(lognoop.NewLoggerProvider())
-	t.Cleanup(func() { loggerglobal.SetLoggerProvider(prevLP) })
+	prevLP := otel.GetLoggerProvider()
+	otel.SetLoggerProvider(lognoop.NewLoggerProvider())
+	t.Cleanup(func() { otel.SetLoggerProvider(prevLP) })
 }
 
 // testSpanContext is a valid, sampled span context for trace-stamping assertions.
