@@ -53,4 +53,4 @@ body:
       placeholder: |
         OS: Debian 13
         Arch: amd64
-        Go: 1.27.2
+        Go: 1.27.3
