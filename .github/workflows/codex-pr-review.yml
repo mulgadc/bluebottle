@@ -26,11 +26,17 @@ jobs:
       PR: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      WORK: ${{ runner.temp }}/work
       PR_DIR: ${{ github.workspace }}/pr
-      MULGA_DIR: ${{ runner.temp }}/mulga
-      TOOLS: ${{ runner.temp }}/tools/scripts
     steps:
+      # The runner context is not available in job-level env.
+      - name: Set paths
+        run: |
+          {
+            echo "WORK=$RUNNER_TEMP/work"
+            echo "MULGA_DIR=$RUNNER_TEMP/mulga"
+            echo "TOOLS=$RUNNER_TEMP/tools/scripts"
+          } >> "$GITHUB_ENV"
+
       - name: Token for mulga (read)
         id: mulga
         uses: actions/create-github-app-token@v3.3.0

@@ -24,8 +24,11 @@ jobs:
     env:
       REPO: ${{ github.repository }}
       PR: ${{ github.event.issue.number }}
-      WORK: ${{ runner.temp }}/work
     steps:
+      # The runner context is not available in job-level env.
+      - name: Set paths
+        run: echo "WORK=$RUNNER_TEMP/work" >> "$GITHUB_ENV"
+
       - name: Token for mulga (read)
         id: mulga
         uses: actions/create-github-app-token@v3.3.0
