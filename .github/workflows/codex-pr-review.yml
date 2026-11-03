@@ -120,8 +120,12 @@ jobs:
           KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
           CODEX_HOME: ${{ runner.temp }}/codex
         run: |
+          # Ubuntu's AppArmor userns restriction stops bwrap setting up the sandbox's network.
+          f=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -e "$f" ]; then sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0; fi
           npm install -g --silent @openai/codex@0.159.2
           mkdir -p "$CODEX_HOME"
+          codex sandbox -- /bin/true || { echo "the Codex sandbox does not work on this runner" >&2; exit 1; }
           printf '%s' "$KEY" | codex login --with-api-key >/dev/null
 
       - name: Review (no tokens in this step)
