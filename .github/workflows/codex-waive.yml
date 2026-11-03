@@ -1,0 +1,65 @@
+# /codex-waive and /codex-break-glass on a PR into dev, called on issue_comment by every sub-repo.
+name: codex-waive
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  waive:
+    if: >-
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/codex-waive') || startsWith(github.event.comment.body, '/codex-break-glass'))
+    runs-on: ubuntu-26.04
+    environment: codex-review
+    timeout-minutes: 5
+    # Break glass joins the review's group and cancels a review in flight; a waiver does not.
+    concurrency:
+      group: >-
+        ${{ startsWith(github.event.comment.body, '/codex-break-glass')
+            && format('codex-review-{0}-{1}', github.repository, github.event.issue.number)
+            || format('codex-waive-{0}', github.run_id) }}
+      cancel-in-progress: true
+    env:
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.issue.number }}
+      WORK: ${{ runner.temp }}/work
+    steps:
+      - name: Token for mulga (read)
+        id: mulga
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: mulga
+          permission-contents: read
+
+      - name: Token for this repository
+        id: repo
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: ${{ github.event.repository.name }}
+          permission-statuses: write
+          permission-pull-requests: write
+
+      - name: Fetch the review tools from mulga
+        env:
+          TOKEN: ${{ steps.mulga.outputs.token }}
+        run: |
+          mkdir -p "$WORK" "$RUNNER_TEMP/tools"
+          git clone -q --depth 1 --filter=blob:none --sparse "https://x-access-token:${TOKEN}@github.com/mulgadc/mulga.git" "$RUNNER_TEMP/mulga"
+          git -C "$RUNNER_TEMP/mulga" sparse-checkout set scripts/codex-review
+          cp -r "$RUNNER_TEMP/mulga/scripts" "$RUNNER_TEMP/tools/"
+          rm -rf "$RUNNER_TEMP/mulga"
+
+      - name: Waive or break glass
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          COMMENT: ${{ github.event.comment.body }}
+          LOGIN: ${{ github.event.comment.user.login }}
+        run: '"$RUNNER_TEMP/tools/scripts/codex-review/ci.sh" waive'

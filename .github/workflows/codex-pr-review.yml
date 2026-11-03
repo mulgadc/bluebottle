@@ -1,0 +1,138 @@
+# Codex review of a PR's head commit, called on pull_request_target by every sub-repo.
+# The PR's code is read as data and never built or run; the logic lives in mulga's
+# scripts/codex-review/ci.sh, fetched from mulga main.
+name: codex-pr-review
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    environment: codex-review
+    timeout-minutes: 35
+    concurrency:
+      # A body edit never cancels a review; a push or a plan change replaces it.
+      group: >-
+        ${{ github.event.action == 'edited'
+            && format('codex-edit-{0}', github.run_id)
+            || format('codex-review-{0}-{1}', github.repository, github.event.pull_request.number) }}
+      cancel-in-progress: true
+    env:
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      WORK: ${{ runner.temp }}/work
+      PR_DIR: ${{ github.workspace }}/pr
+      MULGA_DIR: ${{ runner.temp }}/mulga
+      TOOLS: ${{ runner.temp }}/tools/scripts
+    steps:
+      - name: Token for mulga (read)
+        id: mulga
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: mulga
+          permission-contents: read
+          skip-token-revoke: true
+
+      - name: Token for this repository (statuses, comments)
+        id: repo
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+          permission-statuses: write
+          permission-pull-requests: write
+
+      - name: Check out the PR head as data
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+          token: ${{ steps.repo.outputs.token }}
+
+      - name: Fetch the review tools and plan history from mulga
+        env:
+          TOKEN: ${{ steps.mulga.outputs.token }}
+        run: |
+          mkdir -p "$WORK" "$RUNNER_TEMP/tools"
+          git clone -q --filter=blob:none --no-checkout "https://x-access-token:${TOKEN}@github.com/mulgadc/mulga.git" "$MULGA_DIR"
+          git -C "$MULGA_DIR" archive origin/main scripts/codex-review.sh scripts/codex-review | tar -x -C "$RUNNER_TEMP/tools"
+
+      - name: Decide whether to review
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+          ACTION: ${{ github.event.action }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BODY: ${{ github.event.pull_request.body }}
+          BODY_BEFORE: ${{ github.event.changes.body.from }}
+        run: |
+          if [ "$ACTION" != edited ]; then unset BODY_BEFORE; fi
+          "$TOOLS/codex-review/ci.sh" gate
+
+      - name: Extract the plan and check the record
+        env:
+          OPENED: ${{ github.event.pull_request.created_at }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: '"$TOOLS/codex-review/ci.sh" prepare'
+
+      - name: Revoke the mulga token
+        env:
+          TOKEN: ${{ steps.mulga.outputs.token }}
+        run: |
+          curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/installation/token >/dev/null
+
+      - name: Set plan-record
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+        run: '"$TOOLS/codex-review/ci.sh" record'
+
+      - name: Set codex-review pending
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+        run: '"$TOOLS/codex-review/ci.sh" pending'
+
+      - name: Install and log in to Codex
+        if: steps.gate.outputs.run == 'true'
+        env:
+          KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          CODEX_HOME: ${{ runner.temp }}/codex
+        run: |
+          npm install -g --silent @openai/codex@0.159.2
+          mkdir -p "$CODEX_HOME"
+          printf '%s' "$KEY" | codex login --with-api-key >/dev/null
+
+      - name: Review (no tokens in this step)
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex
+          CODEX_REVIEW_CREDENTIAL: bot-key
+        run: '"$TOOLS/codex-review/ci.sh" review'
+
+      - name: Publish
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+        run: '"$TOOLS/codex-review/ci.sh" publish'
+
+      - name: Mark the review as unable to run
+        if: (failure() || cancelled()) && steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ steps.repo.outputs.token }}
+        run: '"$TOOLS/codex-review/ci.sh" error'
