@@ -1,0 +1,40 @@
+name: probe-mulga-pr-read
+on:
+  pull_request:
+permissions: {}
+jobs:
+  probe:
+    runs-on: ubuntu-26.04
+    environment: codex-review
+    steps:
+      - name: Token with contents read only
+        id: ro
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: mulga
+          permission-contents: read
+      - name: Token with contents and pull requests read
+        id: pr
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.CODEX_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          owner: mulgadc
+          repositories: mulga
+          permission-contents: read
+          permission-pull-requests: read
+      - name: GET a merged mulga PR
+        env:
+          RO: ${{ steps.ro.outputs.token }}
+          PRT: ${{ steps.pr.outputs.token }}
+        run: |
+          for t in RO PRT; do
+            for p in pulls/363 pulls/363/files; do
+              code=$(curl -s -o "$RUNNER_TEMP/o.json" -w '%{http_code}' -H "Authorization: Bearer ${!t}" \
+                -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/mulgadc/mulga/$p")
+              echo "$t $p HTTP $code $(jq -r 'if type=="object" then "merged=\(.merged) base=\(.base.ref) message=\(.message)" else "array" end' "$RUNNER_TEMP/o.json" 2>/dev/null)"
+            done
+          done
