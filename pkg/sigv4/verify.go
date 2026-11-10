@@ -70,12 +70,14 @@ func (req *SignedRequest) RedactedCanonicalRequest() string {
 // canonicalRequest builds the canonical request, masking the session token when redact is set.
 // Redaction happens after ordering, so a redacted rendering still lines up with the real one.
 func (req *SignedRequest) canonicalRequest(redact bool) string {
-	// One (key, value) pair per value; the raw forms drive ordering.
+	// SigV4 sorts after encoding, and the two orders differ once a byte falls outside the
+	// unreserved set: "a/b" sorts after "a-b" raw, but "a%2Fb" sorts before it.
 	type queryParam struct{ key, value string }
 	params := make([]queryParam, 0, len(req.Canonical.Query))
 	for key, values := range req.Canonical.Query {
+		encodedKey := httpbinding.EscapePath(key, true)
 		for _, value := range values {
-			params = append(params, queryParam{key, value})
+			params = append(params, queryParam{encodedKey, httpbinding.EscapePath(value, true)})
 		}
 	}
 
@@ -86,21 +88,17 @@ func (req *SignedRequest) canonicalRequest(redact bool) string {
 			return strings.Compare(a.key, b.key)
 		}
 
-		// Order on raw decoded bytes as AWS does (the SDK sorts req.URL.Query() before
-		// encoding); encoded order differs once a byte drops below the unreserved range, so
-		// "é" sorts after "a" but its "%C3%A9" encoding before it.
 		return strings.Compare(a.value, b.value)
 	})
 
-	// Encode once, now that ordering is settled.
 	pairs := make([]string, len(params))
 	for i, p := range params {
-		value := httpbinding.EscapePath(p.value, true)
+		value := p.value
 		if redact && strings.EqualFold(p.key, amzSessionName) {
 			value = redactedValue
 		}
 
-		pairs[i] = httpbinding.EscapePath(p.key, true) + "=" + value
+		pairs[i] = p.key + "=" + value
 	}
 
 	// SigV4 signs the headers in sorted order, for both the header block and the list below.
