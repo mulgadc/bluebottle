@@ -46,6 +46,7 @@ jobs:
           owner: mulgadc
           repositories: mulga
           permission-contents: read
+          permission-pull-requests: read
           skip-token-revoke: true
 
       - name: Token for this repository (statuses, comments)
@@ -92,6 +93,9 @@ jobs:
 
       - name: Extract the plan and check the record
         env:
+          # The mulga token reads the PR named on the "Mulga design" line.
+          GH_TOKEN: ${{ steps.mulga.outputs.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
           OPENED: ${{ github.event.pull_request.created_at }}
           BODY: ${{ github.event.pull_request.body }}
         run: '"$TOOLS/codex-review/ci.sh" prepare'
