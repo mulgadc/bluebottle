@@ -7,8 +7,8 @@ import (
 )
 
 // Condition context keys understood by the evaluator. Only the S3 data plane
-// supplies KeyS3Prefix and KeyS3MaxKeys, and only an iam:PassRole check supplies
-// KeyPassedToService.
+// supplies KeyS3Prefix and KeyS3MaxKeys, only an iam:PassRole check supplies
+// KeyPassedToService, and only a request through a VPC endpoint the VPC keys.
 // Every door supplies KeyCurrentTime and KeyEpochTime through SetRequestTime.
 const (
 	KeySourceIP         = "aws:SourceIp"
@@ -22,6 +22,9 @@ const (
 	KeyPassedToService  = "iam:PassedToService"
 	KeyCurrentTime      = "aws:CurrentTime"
 	KeyEpochTime        = "aws:EpochTime"
+	KeySourceVpce       = "aws:SourceVpce"
+	KeySourceVpc        = "aws:SourceVpc"
+	KeyVpcSourceIP      = "aws:VpcSourceIp"
 )
 
 // Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
@@ -133,6 +136,11 @@ var supportedConditions = map[string]map[string]bool{
 	// Read from the server clock at each door, never from the request.
 	KeyCurrentTime: operators(dateOps),
 	KeyEpochTime:   operators(dateOps, numericOps),
+	// Set by the gate from the endpoint channel's authenticated header, never
+	// from the request; a request through an endpoint carries no aws:SourceIp.
+	KeySourceVpce:  operators(stringEqualsOps, stringLikeOps),
+	KeySourceVpc:   operators(stringEqualsOps, stringLikeOps),
+	KeyVpcSourceIP: {OpIPAddress: true, OpNotIPAddress: true},
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.
@@ -185,7 +193,7 @@ func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 				}
 				return false
 			}
-			if !conditionHolds(base, actual, values, keys, failClosed) {
+			if !conditionHolds(key, base, actual, values, keys, failClosed) {
 				return false
 			}
 		}
@@ -199,11 +207,11 @@ func (s *Statement) conditionsHold(keys ConditionKeys, failClosed bool) bool {
 // keys resolves policy variables in the string and ARN operators' values. Bool,
 // IpAddress, date and numeric values are compared as written, a variable in any
 // having no meaning. A value carrying an unresolvable reference takes failClosed.
-func conditionHolds(operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
+func conditionHolds(key, operator, actual string, values []string, keys ConditionKeys, failClosed bool) bool {
 	// Inverting failClosed inside the match keeps an unresolvable value narrowing
 	// access after the negation, as NotResource does.
 	if positive, negated := negatedOperators[operator]; negated {
-		return !conditionHolds(positive, actual, values, keys, !failClosed)
+		return !conditionHolds(key, positive, actual, values, keys, !failClosed)
 	}
 
 	switch operator {
@@ -230,7 +238,7 @@ func conditionHolds(operator, actual string, values []string, keys ConditionKeys
 			}
 		}
 	case OpIPAddress:
-		return ipInAny(actual, values, failClosed)
+		return ipInAny(key, actual, values, failClosed)
 	case OpDateEquals, OpDateLessThan, OpDateLessThanEquals, OpDateGreaterThan, OpDateGreaterThanEquals:
 		return dateHoldsAny(operator, actual, values, failClosed)
 	case OpNumericEquals, OpNumericLessThan, OpNumericLessThanEquals, OpNumericGreaterThan, OpNumericGreaterThanEquals:
@@ -274,12 +282,12 @@ func equalsAny(actual string, values []string, keys ConditionKeys, failClosed, f
 // ipInAny reports whether actual falls inside any CIDR block or equals any bare
 // address in values. An unparseable request address takes failClosed, as every
 // other operator does with input it cannot resolve, and warns either way.
-func ipInAny(actual string, values []string, failClosed bool) bool {
+func ipInAny(key, actual string, values []string, failClosed bool) bool {
 	addr, err := netip.ParseAddr(actual)
 	if err != nil {
 		// A door passing host:port rather than a bare host is the likely cause.
 		slog.Warn("iampolicy: request address is not an address, so the condition cannot compare",
-			"address", actual, "key", KeySourceIP, "matches", failClosed)
+			"address", actual, "key", key, "matches", failClosed)
 		return failClosed
 	}
 	addr = addr.Unmap()
@@ -293,7 +301,7 @@ func ipInAny(actual string, values []string, failClosed bool) bool {
 		other, err := netip.ParseAddr(v)
 		if err != nil {
 			slog.Warn("iampolicy: IpAddress condition value is not an address or CIDR block, matching nothing",
-				"value", v, "key", KeySourceIP)
+				"value", v, "key", key)
 			continue
 		}
 		if other.Unmap() == addr {

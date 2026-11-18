@@ -31,6 +31,11 @@ const (
 	doorEpochTime   = "1790856000"
 	// The page size a listing asked for.
 	doorMaxKeys = "100"
+	// A request through a gateway VPC endpoint: the guest's private address and
+	// the endpoint's identity, with no aws:SourceIp.
+	doorVpce        = "vpce-0a1b2c3d4e5f60718"
+	doorVpc         = "vpc-0a1b2c3d4e5f60718"
+	doorVpcSourceIP = "10.20.30.40"
 )
 
 type door struct {
@@ -104,6 +109,18 @@ var doors = []door{
 		iampolicy.KeyPrincipalAccount: doorAccount,
 		iampolicy.KeySourceIP:         s3GateIP,
 		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeAssumedRole,
+	}},
+	{"s3-gate/vpc-endpoint", iampolicy.ConditionKeys{
+		iampolicy.KeySecureTransport:  "true",
+		iampolicy.KeyCurrentTime:      doorCurrentTime,
+		iampolicy.KeyEpochTime:        doorEpochTime,
+		iampolicy.KeyUsername:         doorUser,
+		iampolicy.KeyUserID:           doorUserID,
+		iampolicy.KeyPrincipalAccount: doorAccount,
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
+		iampolicy.KeySourceVpce:       doorVpce,
+		iampolicy.KeySourceVpc:        doorVpc,
+		iampolicy.KeyVpcSourceIP:      doorVpcSourceIP,
 	}},
 	{"s3-gate/user-object-plaintext", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "false",
@@ -262,6 +279,41 @@ func doorCases() []doorCase {
 				"aws-gateway/assumed-role": grants,
 				"aws-gateway/passrole":     grants,
 			}),
+		},
+		{
+			// Only a request through an endpoint carries the VPC keys.
+			name: "aws:SourceVpce StringEquals the endpoint",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals, iampolicy.KeySourceVpce, doorVpce)},
+			want: everywhere(inert, map[string]outcome{"s3-gate/vpc-endpoint": grants}),
+		},
+		{
+			name: "aws:SourceVpce StringEquals another endpoint",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringEquals, iampolicy.KeySourceVpce, "vpce-0ffffffffffffffff")},
+			want: everywhere(inert, nil),
+		},
+		{
+			// The "deny unless through my endpoint" bucket idiom: every request
+			// that did not come through it is denied, including the other doors.
+			name: "aws:SourceVpce StringNotEquals the endpoint",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringNotEquals, iampolicy.KeySourceVpce, doorVpce)},
+			want: everywhere(grants, map[string]outcome{"s3-gate/vpc-endpoint": inert}),
+		},
+		{
+			name: "aws:SourceVpc StringLike",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpStringLike, iampolicy.KeySourceVpc, "vpc-0a1b*")},
+			want: everywhere(inert, map[string]outcome{"s3-gate/vpc-endpoint": grants}),
+		},
+		{
+			name: "aws:VpcSourceIp IpAddress the guest's subnet",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpIPAddress, iampolicy.KeyVpcSourceIP, "10.20.0.0/16")},
+			want: everywhere(inert, map[string]outcome{"s3-gate/vpc-endpoint": grants}),
+		},
+		{
+			// aws:SourceIp is absent through an endpoint, so an allow on it does not
+			// reach the guest even when its private address is in the range.
+			name: "aws:SourceIp IpAddress the guest's private range",
+			stmt: iampolicy.Statement{Condition: cond(iampolicy.OpIPAddress, iampolicy.KeySourceIP, "10.20.0.0/16")},
+			want: everywhere(inert, nil),
 		},
 		{
 			name: "aws:PrincipalAccount",
