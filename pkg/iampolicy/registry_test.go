@@ -23,6 +23,9 @@ var allConditionKeys = []string{
 	iampolicy.KeyPassedToService,
 	iampolicy.KeyCurrentTime,
 	iampolicy.KeyEpochTime,
+	iampolicy.KeySourceVpce,
+	iampolicy.KeySourceVpc,
+	iampolicy.KeyVpcSourceIP,
 }
 
 // Every operator the package names. conditions_internal_test.go pins that the

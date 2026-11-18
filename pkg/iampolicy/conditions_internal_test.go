@@ -62,7 +62,7 @@ func TestSupportedConditions_EveryAdvertisedOperatorIsImplemented(t *testing.T) 
 			}
 			sample, ok := matcherSamples[op]
 			require.True(t, ok, "operator %q advertised on key %q has no matcher sample", op, key)
-			assert.True(t, conditionHolds(op, sample.actual, sample.values, nil, false),
+			assert.True(t, conditionHolds("", op, sample.actual, sample.values, nil, false),
 				"operator %q advertised on key %q but conditionHolds never matches", op, key)
 		}
 	}
@@ -152,10 +152,10 @@ func TestMatchARN(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, conditionHolds(OpArnLike, tt.value, []string{tt.pattern}, tt.keys, false))
-			assert.Equal(t, tt.want, conditionHolds(OpArnEquals, tt.value, []string{tt.pattern}, tt.keys, false))
-			assert.Equal(t, !tt.want, conditionHolds(OpArnNotLike, tt.value, []string{tt.pattern}, tt.keys, false))
-			assert.Equal(t, !tt.want, conditionHolds(OpArnNotEquals, tt.value, []string{tt.pattern}, tt.keys, false))
+			assert.Equal(t, tt.want, conditionHolds("", OpArnLike, tt.value, []string{tt.pattern}, tt.keys, false))
+			assert.Equal(t, tt.want, conditionHolds("", OpArnEquals, tt.value, []string{tt.pattern}, tt.keys, false))
+			assert.Equal(t, !tt.want, conditionHolds("", OpArnNotLike, tt.value, []string{tt.pattern}, tt.keys, false))
+			assert.Equal(t, !tt.want, conditionHolds("", OpArnNotEquals, tt.value, []string{tt.pattern}, tt.keys, false))
 		})
 	}
 }
@@ -166,8 +166,8 @@ func TestMatchARN_UnresolvableVariableFailsClosed(t *testing.T) {
 	const role = "arn:aws:iam::111122223333:role/ops"
 	pattern := []string{"arn:aws:iam::111122223333:role/${aws:username}"}
 	for _, op := range []string{OpArnLike, OpArnNotLike} {
-		assert.False(t, conditionHolds(op, role, pattern, nil, false), "%s in an Allow", op)
-		assert.True(t, conditionHolds(op, role, pattern, nil, true), "%s in a Deny", op)
+		assert.False(t, conditionHolds("", op, role, pattern, nil, false), "%s in an Allow", op)
+		assert.True(t, conditionHolds("", op, role, pattern, nil, true), "%s in a Deny", op)
 	}
 }
 
@@ -176,7 +176,7 @@ func TestMatchARN_UnresolvableVariableFailsClosed(t *testing.T) {
 func TestMatchARN_NonARNValueFailsClosed(t *testing.T) {
 	pattern := []string{"arn:aws:iam::*:role/*"}
 	for _, op := range []string{OpArnLike, OpArnNotLike} {
-		assert.False(t, conditionHolds(op, "ops", pattern, nil, false), "%s in an Allow", op)
-		assert.True(t, conditionHolds(op, "ops", pattern, nil, true), "%s in a Deny", op)
+		assert.False(t, conditionHolds("", op, "ops", pattern, nil, false), "%s in an Allow", op)
+		assert.True(t, conditionHolds("", op, "ops", pattern, nil, true), "%s in a Deny", op)
 	}
 }
