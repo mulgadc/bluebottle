@@ -31,11 +31,13 @@ func endpointDecision(t *testing.T, statements string, keys iampolicy.ConditionK
 var alice = iampolicy.ConditionKeys{
 	iampolicy.KeyPrincipalArn:     doorPrincipalArn,
 	iampolicy.KeyPrincipalAccount: doorAccount,
+	iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 }
 
 var bob = iampolicy.ConditionKeys{
 	iampolicy.KeyPrincipalArn:     "arn:aws:iam::" + doorAccount + ":user/bob",
 	iampolicy.KeyPrincipalAccount: doorAccount,
+	iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeUser,
 }
 
 func principal(effect, p string) string {
@@ -48,35 +50,37 @@ func TestEndpointPolicy_EveryPrincipalFormAllows(t *testing.T) {
 	}
 }
 
-// AWS accepts an account, its root, or an IAM user or role as an endpoint
-// policy principal; each names the callers it names on AWS.
-func TestEndpointPolicy_NamedPrincipals(t *testing.T) {
+// On a gateway endpoint an account principal, by ID or root ARN, names that
+// account's root user only, as AWS documents; users and roles are named with
+// aws:PrincipalArn instead.
+func TestEndpointPolicy_AccountPrincipalNamesTheRootUserOnly(t *testing.T) {
+	root := iampolicy.ConditionKeys{
+		iampolicy.KeyPrincipalType:    iampolicy.PrincipalTypeAccount,
+		iampolicy.KeyPrincipalAccount: doorAccount,
+	}
 	cases := []struct {
 		name, principal string
 		keys            iampolicy.ConditionKeys
 		want            iampolicy.Decision
 	}{
-		{"account ID", `{"AWS":"` + doorAccount + `"}`, bob, iampolicy.Allow},
-		{"account root", `{"AWS":"arn:aws:iam::` + doorAccount + `:root"}`, bob, iampolicy.Allow},
-		{"the user", `{"AWS":"` + doorPrincipalArn + `"}`, alice, iampolicy.Allow},
-		{"another user", `{"AWS":"` + doorPrincipalArn + `"}`, bob, iampolicy.Deny},
-		{"another account's root", `{"AWS":"arn:aws:iam::999999999999:root"}`, alice, iampolicy.Deny},
-		{"one of a list", `{"AWS":["arn:aws:iam::999999999999:root","` + doorPrincipalArn + `"]}`, alice, iampolicy.Allow},
-		{"caller unknown", `{"AWS":"` + doorPrincipalArn + `"}`, nil, iampolicy.Deny},
+		{"account ID, its root", `{"AWS":"` + doorAccount + `"}`, root, iampolicy.Allow},
+		{"root ARN, its root", `{"AWS":"arn:aws:iam::` + doorAccount + `:root"}`, root, iampolicy.Allow},
+		{"account ID, a user in it", `{"AWS":"` + doorAccount + `"}`, alice, iampolicy.Deny},
+		{"another account", `{"AWS":["999999999999"]}`, root, iampolicy.Deny},
+		{"one of a list", `{"AWS":["999999999999","` + doorAccount + `"]}`, root, iampolicy.Allow},
+		{"caller undescribed", `{"AWS":"` + doorAccount + `"}`, nil, iampolicy.Deny},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, endpointDecision(t, principal("Allow", tc.principal), tc.keys))
 		})
 	}
-}
 
-// A Deny naming one principal denies that principal and no other, and denies
-// everyone when the door cannot say who the caller is.
-func TestEndpointPolicy_DenyNamingAPrincipal(t *testing.T) {
-	policy := allowAll + "," + principal("Deny", `{"AWS":"`+doorPrincipalArn+`"}`)
-	assert.Equal(t, iampolicy.Deny, endpointDecision(t, policy, alice))
-	assert.Equal(t, iampolicy.Allow, endpointDecision(t, policy, bob))
+	// A Deny naming the account denies its root, and everyone when the door
+	// cannot say who the caller is, but not the account's users.
+	policy := allowAll + "," + principal("Deny", `{"AWS":"`+doorAccount+`"}`)
+	assert.Equal(t, iampolicy.Deny, endpointDecision(t, policy, root))
+	assert.Equal(t, iampolicy.Allow, endpointDecision(t, policy, alice))
 	assert.Equal(t, iampolicy.Deny, endpointDecision(t, policy, nil))
 }
 
@@ -85,7 +89,7 @@ func TestEndpointPolicy_DenyNamingAPrincipal(t *testing.T) {
 func TestEndpointPolicy_UnmatchablePrincipalsFailClosed(t *testing.T) {
 	for _, p := range []string{
 		`{"Service":"s3.amazonaws.com"}`, `{"AWS":"arn:aws:sts::111122223333:assumed-role/ops/s"}`,
-		`{"AWS":"alice"}`, `{"AWS":"*","Service":"*"}`, `{"AWS":[]}`, `"arn:aws:iam::111122223333:root"`,
+		`{"AWS":"alice"}`, `{"AWS":"*","Service":"*"}`, `{"AWS":"` + doorPrincipalArn + `"}`, `{"AWS":"arn:aws:iam::111122223333:role/ops"}`, `{"AWS":[]}`, `"arn:aws:iam::111122223333:root"`,
 	} {
 		assert.Equal(t, iampolicy.Deny, endpointDecision(t, principal("Allow", p), alice), "Allow with %s grants nothing", p)
 		assert.Equal(t, iampolicy.Deny, endpointDecision(t, allowAll+","+principal("Deny", p), bob), "Deny with %s still denies", p)
@@ -155,7 +159,8 @@ func TestEndpointPolicy_PrincipalArnDenyOverridesABroadAllow(t *testing.T) {
 func TestEndpointPolicy_MalformedConditionsFailClosed(t *testing.T) {
 	for _, condition := range []string{
 		`{"ArnEquals":null}`, `{"ArnEquals":{}}`, `{"StringEquals":{"aws:SourceVpce":null}}`, `{"StringEquals":{"aws:SourceVpce":[]}}`,
-		`{"Null":{"aws:SourceVpce":"maybe"}}`,
+		`{"Null":{"aws:SourceVpce":"maybe"}}`, `{"IpAddress":{"aws:VpcSourceIp":"10.0.0.0/33"}}`, `{"NotIpAddress":{"aws:VpcSourceIp":"nope"}}`,
+		`{"DateGreaterThan":{"aws:CurrentTime":"soon"}}`, `{"NumericLessThan":{"aws:EpochTime":"ten"}}`, `{"Bool":{"aws:SecureTransport":"yes"}}`,
 	} {
 		allow := `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":` + condition + `}`
 		assert.Equal(t, iampolicy.Deny, endpointDecision(t, allow, alice), "Allow with %s grants nothing", condition)
@@ -192,7 +197,7 @@ func TestSupportedEndpointCondition(t *testing.T) {
 // statement, so no stored endpoint policy is silently narrower than written.
 func TestCheckEndpointPolicy(t *testing.T) {
 	accepted := []struct{ version, stmt string }{
-		{iampolicy.Version2012, principal("Allow", `{"AWS":["`+doorAccount+`","arn:aws:iam::`+doorAccount+`:role/ops"]}`)},
+		{iampolicy.Version2012, principal("Allow", `{"AWS":["`+doorAccount+`","arn:aws:iam::`+doorAccount+`:root"]}`)},
 		{iampolicy.Version2012, `{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"s3:DeleteObject","Resource":"arn:aws:s3:::home/${aws:username}/*",
 			"Condition":{"ArnNotLike":{"aws:PrincipalArn":"arn:aws:iam::*:role/admin"}}}`},
 		// Before 2012-10-17 a ${...} is literal text, so there is nothing to resolve.
@@ -204,15 +209,18 @@ func TestCheckEndpointPolicy(t *testing.T) {
 	}
 
 	refused := []struct{ name, stmt, want string }{
-		{"service principal", principal("Allow", `{"Service":"s3.amazonaws.com"}`), `statement 1: Principal must be "*" or name AWS accounts, IAM users or IAM roles`},
-		{"no principal", `{"Effect":"Allow","Action":"*","Resource":"*"}`, `statement 1: Principal must be "*" or name AWS accounts, IAM users or IAM roles`},
+		{"service principal", principal("Allow", `{"Service":"s3.amazonaws.com"}`), `statement 1: Principal must be "*" or name AWS accounts; name users and roles with aws:PrincipalArn`},
+		{"no principal", `{"Effect":"Allow","Action":"*","Resource":"*"}`, `statement 1: Principal must be "*" or name AWS accounts; name users and roles with aws:PrincipalArn`},
 		{"unknown key", `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}`,
 			"statement 1: condition Bool on aws:MultiFactorAuthPresent is not supported"},
 		{"bad effect", `{"Effect":"Maybe","Principal":"*","Action":"*","Resource":"*"}`, `statement 1: Effect "Maybe" is not Allow or Deny`},
 		{"empty condition", `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":{"ArnEquals":null}}`,
 			"statement 1: condition ArnEquals names no key"},
 		{"bad Null operand", `{"Effect":"Deny","Principal":"*","Action":"*","Resource":"*","Condition":{"Null":{"aws:SourceVpce":"maybe"}}}`,
-			"statement 1: condition Null on aws:SourceVpce takes true or false"},
+			`statement 1: condition Null on aws:SourceVpce cannot compare with "maybe"`},
+		{"user principal", principal("Allow", `{"AWS":"`+doorPrincipalArn+`"}`), `statement 1: Principal must be "*" or name AWS accounts; name users and roles with aws:PrincipalArn`},
+		{"bad IP operand", `{"Effect":"Deny","Principal":"*","Action":"*","Resource":"*","Condition":{"NotIpAddress":{"aws:VpcSourceIp":"10.0.0.0/33"}}}`,
+			`statement 1: condition NotIpAddress on aws:VpcSourceIp cannot compare with "10.0.0.0/33"`},
 		{"action pair", `{"Effect":"Allow","Principal":"*","Action":"*","NotAction":"s3:GetObject","Resource":"*"}`, "statement 1: Action/NotAction is not supported"},
 		{"unresolvable variable in a condition", `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*",
 			"Condition":{"StringEquals":{"aws:PrincipalArn":"${aws:PrincipalArn}"}}}`, "statement 1: condition StringEquals on aws:PrincipalArn has a policy variable that cannot be resolved"},

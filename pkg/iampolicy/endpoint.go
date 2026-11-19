@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 )
@@ -108,7 +109,7 @@ func (s *Statement) endpointUnenforceable() (operator, key string, found bool) {
 // cannot enforce, with the reason a write path reports, or "" if there is none.
 func (s *Statement) endpointFault() (operator, key, fault string) {
 	if _, ok := endpointPrincipals(s.Principal); !ok {
-		return "Principal", "", "Principal must be \"*\" or name AWS accounts, IAM users or IAM roles"
+		return "Principal", "", "Principal must be \"*\" or name AWS accounts; name users and roles with aws:PrincipalArn"
 	}
 	for _, values := range [][]string{s.Resource, s.NotResource} {
 		for _, v := range values {
@@ -130,8 +131,8 @@ func (s *Statement) endpointFault() (operator, key, fault string) {
 				return op, k, fmt.Sprintf("condition %s on %s has no value", op, k)
 			}
 			for _, v := range values {
-				if base == OpNull && !strings.EqualFold(v, "true") && !strings.EqualFold(v, "false") {
-					return op, k, fmt.Sprintf("condition Null on %s takes true or false", k)
+				if !readableOperand(base, v) {
+					return op, k, fmt.Sprintf("condition %s on %s cannot compare with %q", op, k, v)
 				}
 				if _, bad := UnsupportedVariable(v); bad && substitutesValues(base) {
 					return op, k, fmt.Sprintf("condition %s on %s has a policy variable that cannot be resolved", op, k)
@@ -140,6 +141,31 @@ func (s *Statement) endpointFault() (operator, key, fault string) {
 		}
 	}
 	return "", "", ""
+}
+
+// readableOperand reports whether the matcher can compare with v under
+// operator, which otherwise reads v as matching nothing and so could drop a Deny.
+func readableOperand(operator, v string) bool {
+	if positive, negated := negatedOperators[operator]; negated {
+		operator = positive
+	}
+	switch operator {
+	case OpNull, OpBool:
+		return strings.EqualFold(v, "true") || strings.EqualFold(v, "false")
+	case OpIPAddress:
+		if _, err := netip.ParsePrefix(v); err == nil {
+			return true
+		}
+		_, err := netip.ParseAddr(v)
+		return err == nil
+	case OpDateEquals, OpDateLessThan, OpDateLessThanEquals, OpDateGreaterThan, OpDateGreaterThanEquals:
+		_, err := ParseDate(v)
+		return err == nil
+	case OpNumericEquals, OpNumericLessThan, OpNumericLessThanEquals, OpNumericGreaterThan, OpNumericGreaterThanEquals:
+		_, err := ParseNumber(v)
+		return err == nil
+	}
+	return true
 }
 
 // substitutesValues reports whether operator resolves policy variables in its
@@ -156,16 +182,15 @@ func substitutesValues(operator string) bool {
 }
 
 // accountID is a bare account ID, which AWS accepts as a principal and reads as
-// the account's root.
+// the account's root user.
 var accountID = regexp.MustCompile(`^[0-9]{12}$`)
 
-// iamARN is a principal ARN the gate can compare with aws:PrincipalArn: an
-// account root, or an IAM user or role.
-var iamARN = regexp.MustCompile(`^arn:aws:iam::([0-9]{12}):(root|user/.+|role/.+)$`)
+// rootARN names an account's root user.
+var rootARN = regexp.MustCompile(`^arn:aws:iam::([0-9]{12}):root$`)
 
-// endpointPrincipals returns the AWS principals a Principal element names, or
-// "*" for every caller, and false for a form the gate cannot match: none, a
-// service or federated principal, or an ARN that is not an IAM user, role or root.
+// endpointPrincipals returns the accounts a Principal element names, or "*" for
+// every caller, and false for a form a gateway endpoint gives no meaning: none,
+// a service or federated principal, or an IAM user, role or session ARN.
 func endpointPrincipals(raw []byte) ([]string, bool) {
 	raw = bytes.TrimSpace(raw)
 	var star string
@@ -180,40 +205,37 @@ func endpointPrincipals(raw []byte) ([]string, bool) {
 	if !ok || len(names) == 0 {
 		return nil, false
 	}
+	accounts := make([]string, 0, len(names))
 	for _, n := range names {
-		if n != "*" && !accountID.MatchString(n) && !iamARN.MatchString(n) {
+		if m := rootARN.FindStringSubmatch(n); m != nil {
+			n = m[1]
+		}
+		if n != "*" && !accountID.MatchString(n) {
 			return nil, false
 		}
+		accounts = append(accounts, n)
 	}
-	return names, true
+	return accounts, true
 }
 
-// matchesPrincipal reports whether the caller is one the statement names. An
-// account or root names every principal in the account, and a user or role ARN
-// the principal whose aws:PrincipalArn it is. A key the door did not supply
-// takes failClosed.
+// matchesPrincipal reports whether the caller is one the statement names. On a
+// gateway endpoint an account names its root user only, as AWS documents; a
+// caller the door does not describe takes failClosed.
 func (s *Statement) matchesPrincipal(keys ConditionKeys, failClosed bool) bool {
-	names, _ := endpointPrincipals(s.Principal)
-	for _, n := range names {
-		if n == "*" {
+	accounts, _ := endpointPrincipals(s.Principal)
+	for _, account := range accounts {
+		if account == "*" {
 			return true
 		}
-		account, isAccount := n, accountID.MatchString(n)
-		if m := iamARN.FindStringSubmatch(n); m != nil && m[2] == "root" {
-			account, isAccount = m[1], true
-		}
-		want, have := keys[KeyPrincipalArn]
-		if isAccount {
-			want, have = keys[KeyPrincipalAccount]
-			n = account
-		}
-		if !have {
+		principalType, typed := keys[KeyPrincipalType]
+		caller, known := keys[KeyPrincipalAccount]
+		if !typed || !known {
 			if failClosed {
 				return true
 			}
 			continue
 		}
-		if want == n {
+		if principalType == PrincipalTypeAccount && caller == account {
 			return true
 		}
 	}
