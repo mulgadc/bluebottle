@@ -36,6 +36,8 @@ const (
 	doorVpce        = "vpce-0a1b2c3d4e5f60718"
 	doorVpc         = "vpc-0a1b2c3d4e5f60718"
 	doorVpcSourceIP = "10.20.30.40"
+	// The caller's ARN, which only an endpoint policy may test.
+	doorPrincipalArn = "arn:aws:iam::" + doorAccount + ":user/" + doorUser
 )
 
 type door struct {
@@ -121,6 +123,7 @@ var doors = []door{
 		iampolicy.KeySourceVpce:       doorVpce,
 		iampolicy.KeySourceVpc:        doorVpc,
 		iampolicy.KeyVpcSourceIP:      doorVpcSourceIP,
+		iampolicy.KeyPrincipalArn:     doorPrincipalArn,
 	}},
 	{"s3-gate/user-object-plaintext", iampolicy.ConditionKeys{
 		iampolicy.KeySecureTransport:  "false",
