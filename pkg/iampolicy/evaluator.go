@@ -2,6 +2,8 @@ package iampolicy
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 )
 
@@ -36,6 +38,46 @@ const (
 // Allow non-matching and a Deny matching, so it can only narrow access. In a
 // document not written in Version2012, ${...} is literal text, as in AWS.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
+	return evaluate(action, resource, policies, keys, identityMode)
+}
+
+// EvaluateEndpointPolicy decides action on resource under a VPC endpoint policy,
+// the second gate on a request through an endpoint, as EvaluateWithKeys does an
+// identity policy. Principal "*" and {"AWS":"*"} select every caller there, and
+// aws:PrincipalArn is enforced; any other Principal, or none, fails closed.
+func EvaluateEndpointPolicy(action, resource string, policy PolicyDocument, keys ConditionKeys) Decision {
+	return evaluate(action, resource, []PolicyDocument{policy}, keys, endpointMode)
+}
+
+// CheckEndpointPolicy reports the first statement EvaluateEndpointPolicy would
+// not enforce as written, so a write path can refuse a policy rather than store
+// one that fails closed.
+func CheckEndpointPolicy(policy PolicyDocument) error {
+	for i := range policy.Statement {
+		s := &policy.Statement[i]
+		if s.Effect != EffectAllow && s.Effect != EffectDeny {
+			return fmt.Errorf("statement %d: Effect %q is not Allow or Deny", i, s.Effect)
+		}
+		if operator, key, found := s.unenforceable(endpointMode); found {
+			if key == "" {
+				return fmt.Errorf("statement %d: %s is not supported", i, operator)
+			}
+			return fmt.Errorf("statement %d: condition %s on %s is not supported", i, operator, key)
+		}
+	}
+	return nil
+}
+
+// mode selects what a statement may carry: an identity policy has no Principal,
+// and an endpoint policy must name every principal.
+type mode int
+
+const (
+	identityMode mode = iota
+	endpointMode
+)
+
+func evaluate(action, resource string, policies []PolicyDocument, keys ConditionKeys, m mode) Decision {
 	hasAllow := false
 	for i := range policies {
 		statements := policies[i].Statement
@@ -45,7 +87,7 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 		for j := range statements {
 			stmt := &statements[j]
 
-			if !stmt.matches(action, resource, keys) {
+			if !stmt.matches(action, resource, keys, m) {
 				continue
 			}
 			switch stmt.Effect {
@@ -71,12 +113,12 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 // Constructs the evaluator cannot enforce fail closed: an Allow carrying one is
 // treated as non-matching, a Deny as matching, so an unenforced restriction can
 // only narrow access, never widen it.
-func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
+func (s *Statement) matches(action, resource string, keys ConditionKeys, m mode) bool {
 	// The same rule covers a policy variable this door cannot supply: an Allow
 	// carrying one selects nothing, a Deny selects everything it might have.
 	failClosed := s.Effect != EffectAllow
 
-	if operator, key, found := s.unenforceable(); found {
+	if operator, key, found := s.unenforceable(m); found {
 		slog.Warn("iampolicy: statement carries a construct this release does not enforce, failing closed",
 			"sid", s.Sid, "effect", s.Effect, "action", action,
 			"operator", operator, "key", key)
@@ -128,7 +170,7 @@ func (s *Statement) wellFormedResources() bool {
 // unenforceable returns the first construct on the statement that this release
 // cannot evaluate, for the fail-closed warning. A malformed selector pair and
 // Principal report themselves in the operator position; they have no key.
-func (s *Statement) unenforceable() (operator, key string, found bool) {
+func (s *Statement) unenforceable(m mode) (operator, key string, found bool) {
 	if !s.wellFormedActions() {
 		return "Action/NotAction", "", true
 	}
@@ -137,15 +179,43 @@ func (s *Statement) unenforceable() (operator, key string, found bool) {
 	}
 	// A JSON null counts as absent, so a document that merely spells the field
 	// out is not forced down the fail-closed path.
-	if p := bytes.TrimSpace(s.Principal); len(p) > 0 && !bytes.Equal(p, []byte("null")) {
+	p := bytes.TrimSpace(s.Principal)
+	absent := len(p) == 0 || bytes.Equal(p, []byte("null"))
+	if (m == identityMode && !absent) || (m == endpointMode && !everyPrincipal(p)) {
 		return "Principal", "", true
+	}
+	supported := SupportedCondition
+	if m == endpointMode {
+		supported = SupportedEndpointCondition
 	}
 	for op, byKey := range s.Condition {
 		for k := range byKey {
-			if !SupportedCondition(op, k) {
+			if !supported(op, k) {
 				return op, k, true
 			}
 		}
 	}
 	return "", "", false
+}
+
+// everyPrincipal reports whether a Principal element names every caller: "*",
+// or an AWS principal of "*" alone, the forms an endpoint policy may use.
+func everyPrincipal(raw []byte) bool {
+	var star string
+	if json.Unmarshal(raw, &star) == nil {
+		return star == "*"
+	}
+	var byType map[string]json.RawMessage
+	if json.Unmarshal(raw, &byType) != nil || len(byType) != 1 {
+		return false
+	}
+	aws, ok := byType["AWS"]
+	if !ok {
+		return false
+	}
+	if json.Unmarshal(aws, &star) == nil {
+		return star == "*"
+	}
+	var list []string
+	return json.Unmarshal(aws, &list) == nil && len(list) == 1 && list[0] == "*"
 }

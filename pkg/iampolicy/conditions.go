@@ -25,6 +25,7 @@ const (
 	KeySourceVpce       = "aws:SourceVpce"
 	KeySourceVpc        = "aws:SourceVpc"
 	KeyVpcSourceIP      = "aws:VpcSourceIp"
+	KeyPrincipalArn     = "aws:PrincipalArn"
 )
 
 // Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
@@ -87,7 +88,7 @@ var negatedOperators = map[string]string{
 
 // Operator sets for the registry below. Each string key carries the negated and
 // case-insensitive forms of the operators it supports. The Arn operators are on
-// no key: none of the supported keys is ARN-valued.
+// the endpoint-only aws:PrincipalArn alone, the one ARN-valued key.
 var (
 	stringEqualsOps = []string{OpStringEquals, OpStringNotEquals, OpStringEqualsIgnoreCase, OpStringNotEqualsIgnoreCase}
 	stringLikeOps   = []string{OpStringLike, OpStringNotLike}
@@ -141,6 +142,31 @@ var supportedConditions = map[string]map[string]bool{
 	KeySourceVpce:  operators(stringEqualsOps, stringLikeOps),
 	KeySourceVpc:   operators(stringEqualsOps, stringLikeOps),
 	KeyVpcSourceIP: {OpIPAddress: true, OpNotIPAddress: true},
+}
+
+// endpointConditions are the keys only an endpoint policy may name. The gate
+// supplies aws:PrincipalArn on an endpoint request; no identity door does, so an
+// identity policy naming it would carry a grant that never fires.
+var endpointConditions = map[string]map[string]bool{
+	KeyPrincipalArn: operators(stringEqualsOps, stringLikeOps,
+		[]string{OpArnEquals, OpArnNotEquals, OpArnLike, OpArnNotLike}),
+}
+
+// SupportedEndpointCondition reports whether an endpoint policy may carry
+// operator on key: every identity key, and the endpoint-only ones.
+func SupportedEndpointCondition(operator, key string) bool {
+	if SupportedCondition(operator, key) {
+		return true
+	}
+	ops, ok := endpointConditions[key]
+	if !ok {
+		return false
+	}
+	base, ifExists := BaseOperator(operator)
+	if base == OpNull {
+		return !ifExists
+	}
+	return ops[base]
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.

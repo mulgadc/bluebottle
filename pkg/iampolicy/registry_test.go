@@ -26,6 +26,7 @@ var allConditionKeys = []string{
 	iampolicy.KeySourceVpce,
 	iampolicy.KeySourceVpc,
 	iampolicy.KeyVpcSourceIP,
+	iampolicy.KeyPrincipalArn,
 }
 
 // Every operator the package names. conditions_internal_test.go pins that the
@@ -66,10 +67,11 @@ var allOperators = []string{
 // against every resource — say why, or supply the key at a door instead.
 var variablesNoDoorSupplies = map[string]string{}
 
-// conditionKey reports whether any operator enforces key.
+// conditionKey reports whether any operator enforces key in some policy, the
+// endpoint-only keys included.
 func conditionKey(key string) bool {
 	for _, op := range allOperators {
-		if iampolicy.SupportedCondition(op, key) {
+		if iampolicy.SupportedEndpointCondition(op, key) {
 			return true
 		}
 	}
