@@ -25,6 +25,7 @@ const (
 	KeySourceVpce       = "aws:SourceVpce"
 	KeySourceVpc        = "aws:SourceVpc"
 	KeyVpcSourceIP      = "aws:VpcSourceIp"
+	KeyPrincipalArn     = "aws:PrincipalArn"
 )
 
 // Canonical aws:PrincipalType values, spelled exactly as AWS documents them.
@@ -87,7 +88,7 @@ var negatedOperators = map[string]string{
 
 // Operator sets for the registry below. Each string key carries the negated and
 // case-insensitive forms of the operators it supports. The Arn operators are on
-// no key: none of the supported keys is ARN-valued.
+// the endpoint-only aws:PrincipalArn alone, the one ARN-valued key.
 var (
 	stringEqualsOps = []string{OpStringEquals, OpStringNotEquals, OpStringEqualsIgnoreCase, OpStringNotEqualsIgnoreCase}
 	stringLikeOps   = []string{OpStringLike, OpStringNotLike}
@@ -143,19 +144,37 @@ var supportedConditions = map[string]map[string]bool{
 	KeyVpcSourceIP: {OpIPAddress: true, OpNotIPAddress: true},
 }
 
+// endpointConditions are the keys only an endpoint policy may name. The gate
+// supplies aws:PrincipalArn on an endpoint request; no identity door does, so an
+// identity policy naming it would carry a grant that never fires.
+var endpointConditions = map[string]map[string]bool{
+	KeyPrincipalArn: operators(stringEqualsOps, stringLikeOps,
+		[]string{OpArnEquals, OpArnNotEquals, OpArnLike, OpArnNotLike}),
+}
+
+// SupportedEndpointCondition reports whether an endpoint policy may carry
+// operator on key: every identity key, and the endpoint-only ones.
+func SupportedEndpointCondition(operator, key string) bool {
+	return SupportedCondition(operator, key) || supportedIn(endpointConditions, operator, key)
+}
+
 // SupportedCondition reports whether the evaluator enforces operator on key.
 // Write paths gate on this so the front door never accepts a condition the
 // evaluator would fail closed on.
-//
-// An IfExists form is supported exactly where its base operator is, and Null on
-// every registered key, so neither needs entries of its own that could drift.
 func SupportedCondition(operator, key string) bool {
+	return supportedIn(supportedConditions, operator, key)
+}
+
+// supportedIn reports whether registry enforces operator on key. An IfExists
+// form is supported exactly where its base operator is, and Null on every
+// registered key, so neither needs entries of its own that could drift.
+func supportedIn(registry map[string]map[string]bool, operator, key string) bool {
+	ops, registered := registry[key]
 	base, ifExists := BaseOperator(operator)
 	if base == OpNull {
-		_, registered := supportedConditions[key]
 		return registered && !ifExists
 	}
-	return supportedConditions[key][base]
+	return ops[base]
 }
 
 // BaseOperator strips the IfExists suffix from operator, reporting whether it

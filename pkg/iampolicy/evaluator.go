@@ -36,6 +36,19 @@ const (
 // Allow non-matching and a Deny matching, so it can only narrow access. In a
 // document not written in Version2012, ${...} is literal text, as in AWS.
 func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys ConditionKeys) Decision {
+	return evaluate(action, resource, policies, keys, identityMode)
+}
+
+// mode selects what a statement may carry: an identity policy has no Principal,
+// and an endpoint policy must name the principals it applies to.
+type mode int
+
+const (
+	identityMode mode = iota
+	endpointMode
+)
+
+func evaluate(action, resource string, policies []PolicyDocument, keys ConditionKeys, m mode) Decision {
 	hasAllow := false
 	for i := range policies {
 		statements := policies[i].Statement
@@ -45,7 +58,7 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 		for j := range statements {
 			stmt := &statements[j]
 
-			if !stmt.matches(action, resource, keys) {
+			if !stmt.matches(action, resource, keys, m) {
 				continue
 			}
 			switch stmt.Effect {
@@ -71,12 +84,12 @@ func EvaluateWithKeys(action, resource string, policies []PolicyDocument, keys C
 // Constructs the evaluator cannot enforce fail closed: an Allow carrying one is
 // treated as non-matching, a Deny as matching, so an unenforced restriction can
 // only narrow access, never widen it.
-func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
+func (s *Statement) matches(action, resource string, keys ConditionKeys, m mode) bool {
 	// The same rule covers a policy variable this door cannot supply: an Allow
 	// carrying one selects nothing, a Deny selects everything it might have.
 	failClosed := s.Effect != EffectAllow
 
-	if operator, key, found := s.unenforceable(); found {
+	if operator, key, found := s.unenforceable(m); found {
 		slog.Warn("iampolicy: statement carries a construct this release does not enforce, failing closed",
 			"sid", s.Sid, "effect", s.Effect, "action", action,
 			"operator", operator, "key", key)
@@ -86,13 +99,20 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys) bool {
 
 		// Deny, and unrecognized effects, fall through so the caller's Effect
 		// switch still fires. A malformed selector pair is treated as matching
-		// on that half, since it cannot be read as a narrower statement.
-		return (!s.wellFormedActions() || s.matchesAction(action)) &&
-			(!s.wellFormedResources() || s.matchesResource(resource, keys, failClosed))
+		// on that half, since it cannot be read as a narrower statement, and in
+		// an endpoint policy so is an empty one, which the write path refuses.
+		actions, resources := s.wellFormedActions(), s.wellFormedResources()
+		if m == endpointMode {
+			actions = actions && (len(s.Action) > 0 || len(s.NotAction) > 0)
+			resources = resources && (len(s.Resource) > 0 || len(s.NotResource) > 0)
+		}
+		return (!actions || s.matchesAction(action)) &&
+			(!resources || s.matchesResource(resource, keys, failClosed))
 	}
 
 	return s.matchesAction(action) &&
 		s.matchesResource(resource, keys, failClosed) &&
+		(m == identityMode || s.matchesPrincipal(keys, failClosed)) &&
 		s.conditionsHold(keys, failClosed)
 }
 
@@ -128,7 +148,11 @@ func (s *Statement) wellFormedResources() bool {
 // unenforceable returns the first construct on the statement that this release
 // cannot evaluate, for the fail-closed warning. A malformed selector pair and
 // Principal report themselves in the operator position; they have no key.
-func (s *Statement) unenforceable() (operator, key string, found bool) {
+func (s *Statement) unenforceable(m mode) (operator, key string, found bool) {
+	if m == endpointMode {
+		operator, key, fault := s.endpointFault()
+		return operator, key, fault != ""
+	}
 	if !s.wellFormedActions() {
 		return "Action/NotAction", "", true
 	}
