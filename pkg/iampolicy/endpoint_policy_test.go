@@ -161,6 +161,7 @@ func TestEndpointPolicy_MalformedConditionsFailClosed(t *testing.T) {
 		`{"ArnEquals":null}`, `{"ArnEquals":{}}`, `{"StringEquals":{"aws:SourceVpce":null}}`, `{"StringEquals":{"aws:SourceVpce":[]}}`,
 		`{"Null":{"aws:SourceVpce":"maybe"}}`, `{"IpAddress":{"aws:VpcSourceIp":"10.0.0.0/33"}}`, `{"NotIpAddress":{"aws:VpcSourceIp":"nope"}}`,
 		`{"DateGreaterThan":{"aws:CurrentTime":"soon"}}`, `{"NumericLessThan":{"aws:EpochTime":"ten"}}`, `{"Bool":{"aws:SecureTransport":"yes"}}`,
+		`{"ArnLike":{"aws:PrincipalArn":"arn:aws:iam::*"}}`, `{"ArnNotEquals":{"aws:PrincipalArn":"admin"}}`,
 	} {
 		allow := `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":` + condition + `}`
 		assert.Equal(t, iampolicy.Deny, endpointDecision(t, allow, alice), "Allow with %s grants nothing", condition)
@@ -262,6 +263,8 @@ func TestCheckEndpointPolicy(t *testing.T) {
 		{"user principal", principal("Allow", `{"AWS":"`+doorPrincipalArn+`"}`), `statement 1: Principal must be "*" or name AWS accounts; name users and roles with aws:PrincipalArn`},
 		{"bad IP operand", `{"Effect":"Deny","Principal":"*","Action":"*","Resource":"*","Condition":{"NotIpAddress":{"aws:VpcSourceIp":"10.0.0.0/33"}}}`,
 			`statement 1: condition NotIpAddress on aws:VpcSourceIp cannot compare with "10.0.0.0/33"`},
+		{"bad ARN operand", `{"Effect":"Deny","Principal":"*","Action":"*","Resource":"*","Condition":{"ArnLike":{"aws:PrincipalArn":"arn:aws:iam::*"}}}`,
+			`statement 1: condition ArnLike on aws:PrincipalArn cannot compare with "arn:aws:iam::*"`},
 		{"action pair", `{"Effect":"Allow","Principal":"*","Action":"*","NotAction":"s3:GetObject","Resource":"*"}`, "statement 1: a statement needs exactly one of Action and NotAction"},
 		{"no action", `{"Effect":"Deny","Principal":"*","Resource":"*"}`, "statement 1: a statement needs exactly one of Action and NotAction"},
 		{"no resource", `{"Effect":"Deny","Principal":"*","Action":"s3:*"}`, "statement 1: a statement needs exactly one of Resource and NotResource"},

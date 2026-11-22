@@ -191,6 +191,9 @@ func readableOperand(operator, v string) bool {
 	case OpNumericEquals, OpNumericLessThan, OpNumericLessThanEquals, OpNumericGreaterThan, OpNumericGreaterThanEquals:
 		_, err := ParseNumber(v)
 		return err == nil
+	case OpArnEquals, OpArnLike:
+		_, ok := SplitARN(v)
+		return ok
 	}
 	return true
 }
