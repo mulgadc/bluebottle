@@ -171,6 +171,25 @@ func TestEndpointPolicy_MalformedConditionsFailClosed(t *testing.T) {
 	}
 }
 
+// A Deny that names no action or no resource is refused at write and, injected
+// past it, still denies at the gate rather than selecting nothing.
+func TestEndpointPolicy_DenyWithoutASelectorFailsClosed(t *testing.T) {
+	for _, deny := range []string{
+		`{"Effect":"Deny","Principal":"*","Resource":"arn:aws:s3:::reports/*"}`,
+		`{"Effect":"Deny","Principal":"*","Action":"s3:GetObject"}`,
+	} {
+		assert.Equal(t, iampolicy.Deny, endpointDecision(t, allowAll+","+deny, alice), deny)
+	}
+}
+
+// Two spellings of one key in a block are separate tests on AWS, both of which
+// must hold; merged, either value would match, so the policy is refused.
+func TestParseEndpointPolicy_RefusesAKeyNamedTwice(t *testing.T) {
+	_, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*",
+		"Condition":{"StringEquals":{"aws:PrincipalAccount":"111111111111","AWS:principalaccount":"222222222222"}}}}`))
+	require.EqualError(t, err, "statement 0: condition StringEquals names aws:PrincipalAccount twice")
+}
+
 // AWS reads a lone statement object as a one-statement array.
 func TestParseEndpointPolicy_StatementObject(t *testing.T) {
 	doc, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":` + allowAll + `}`))
@@ -221,7 +240,9 @@ func TestCheckEndpointPolicy(t *testing.T) {
 		{"user principal", principal("Allow", `{"AWS":"`+doorPrincipalArn+`"}`), `statement 1: Principal must be "*" or name AWS accounts; name users and roles with aws:PrincipalArn`},
 		{"bad IP operand", `{"Effect":"Deny","Principal":"*","Action":"*","Resource":"*","Condition":{"NotIpAddress":{"aws:VpcSourceIp":"10.0.0.0/33"}}}`,
 			`statement 1: condition NotIpAddress on aws:VpcSourceIp cannot compare with "10.0.0.0/33"`},
-		{"action pair", `{"Effect":"Allow","Principal":"*","Action":"*","NotAction":"s3:GetObject","Resource":"*"}`, "statement 1: Action/NotAction is not supported"},
+		{"action pair", `{"Effect":"Allow","Principal":"*","Action":"*","NotAction":"s3:GetObject","Resource":"*"}`, "statement 1: a statement needs exactly one of Action and NotAction"},
+		{"no action", `{"Effect":"Deny","Principal":"*","Resource":"*"}`, "statement 1: a statement needs exactly one of Action and NotAction"},
+		{"no resource", `{"Effect":"Deny","Principal":"*","Action":"s3:*"}`, "statement 1: a statement needs exactly one of Resource and NotResource"},
 		{"unresolvable variable in a condition", `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*",
 			"Condition":{"StringEquals":{"aws:PrincipalArn":"${aws:PrincipalArn}"}}}`, "statement 1: condition StringEquals on aws:PrincipalArn has a policy variable that cannot be resolved"},
 		{"unresolvable variable in a resource", `{"Effect":"Allow","Principal":"*","Action":"*","Resource":"arn:aws:s3:::${aws:SourceVpce}/*"}`,

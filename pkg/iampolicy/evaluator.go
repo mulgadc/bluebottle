@@ -98,10 +98,12 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys, m mode)
 		}
 
 		// Deny, and unrecognized effects, fall through so the caller's Effect
-		// switch still fires. A malformed selector pair is treated as matching
-		// on that half, since it cannot be read as a narrower statement.
-		return (!s.wellFormedActions() || s.matchesAction(action)) &&
-			(!s.wellFormedResources() || s.matchesResource(resource, keys, failClosed))
+		// switch still fires. A malformed or empty selector pair is treated as
+		// matching on that half, since it cannot be read as a narrower statement.
+		actions := len(s.Action) > 0 != (len(s.NotAction) > 0)
+		resources := len(s.Resource) > 0 != (len(s.NotResource) > 0)
+		return (!actions || s.matchesAction(action)) &&
+			(!resources || s.matchesResource(resource, keys, failClosed))
 	}
 
 	return s.matchesAction(action) &&
@@ -143,14 +145,15 @@ func (s *Statement) wellFormedResources() bool {
 // cannot evaluate, for the fail-closed warning. A malformed selector pair and
 // Principal report themselves in the operator position; they have no key.
 func (s *Statement) unenforceable(m mode) (operator, key string, found bool) {
+	if m == endpointMode {
+		operator, key, fault := s.endpointFault()
+		return operator, key, fault != ""
+	}
 	if !s.wellFormedActions() {
 		return "Action/NotAction", "", true
 	}
 	if !s.wellFormedResources() {
 		return "Resource/NotResource", "", true
-	}
-	if m == endpointMode {
-		return s.endpointUnenforceable()
 	}
 	// A JSON null counts as absent, so a document that merely spells the field
 	// out is not forced down the fail-closed path.

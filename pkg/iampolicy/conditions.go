@@ -155,33 +155,26 @@ var endpointConditions = map[string]map[string]bool{
 // SupportedEndpointCondition reports whether an endpoint policy may carry
 // operator on key: every identity key, and the endpoint-only ones.
 func SupportedEndpointCondition(operator, key string) bool {
-	if SupportedCondition(operator, key) {
-		return true
-	}
-	ops, ok := endpointConditions[key]
-	if !ok {
-		return false
-	}
-	base, ifExists := BaseOperator(operator)
-	if base == OpNull {
-		return !ifExists
-	}
-	return ops[base]
+	return SupportedCondition(operator, key) || supportedIn(endpointConditions, operator, key)
 }
 
 // SupportedCondition reports whether the evaluator enforces operator on key.
 // Write paths gate on this so the front door never accepts a condition the
 // evaluator would fail closed on.
-//
-// An IfExists form is supported exactly where its base operator is, and Null on
-// every registered key, so neither needs entries of its own that could drift.
 func SupportedCondition(operator, key string) bool {
+	return supportedIn(supportedConditions, operator, key)
+}
+
+// supportedIn reports whether registry enforces operator on key. An IfExists
+// form is supported exactly where its base operator is, and Null on every
+// registered key, so neither needs entries of its own that could drift.
+func supportedIn(registry map[string]map[string]bool, operator, key string) bool {
+	ops, registered := registry[key]
 	base, ifExists := BaseOperator(operator)
 	if base == OpNull {
-		_, registered := supportedConditions[key]
 		return registered && !ifExists
 	}
-	return supportedConditions[key][base]
+	return ops[base]
 }
 
 // BaseOperator strips the IfExists suffix from operator, reporting whether it

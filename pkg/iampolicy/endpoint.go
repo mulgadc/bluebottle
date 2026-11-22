@@ -43,23 +43,29 @@ func ParseEndpointPolicy(raw []byte) (PolicyDocument, error) {
 		}
 	}
 	for i := range out.Statement {
-		out.Statement[i].Condition = canonicalKeys(out.Statement[i].Condition)
+		if err := canonicalKeys(out.Statement[i].Condition); err != nil {
+			return PolicyDocument{}, fmt.Errorf("statement %d: %w", i, err)
+		}
 	}
 	return out, nil
 }
 
 // canonicalKeys respells each condition key that names a registered key in
-// another case. Two spellings of one key in a block are merged, as one key.
-func canonicalKeys(conditions map[string]map[string]ConditionValue) map[string]map[string]ConditionValue {
+// another case. Two spellings of one key in a block are refused: AWS tests each
+// entry on its own, which merged values would widen.
+func canonicalKeys(conditions map[string]map[string]ConditionValue) error {
 	for op, byKey := range conditions {
 		respelled := make(map[string]ConditionValue, len(byKey))
 		for key, values := range byKey {
 			name := canonicalKey(key)
-			respelled[name] = append(respelled[name], values...)
+			if _, dup := respelled[name]; dup {
+				return fmt.Errorf("condition %s names %s twice", op, name)
+			}
+			respelled[name] = values
 		}
 		conditions[op] = respelled
 	}
-	return conditions
+	return nil
 }
 
 func canonicalKey(key string) string {
@@ -86,10 +92,6 @@ func CheckEndpointPolicy(policy PolicyDocument) error {
 		if s.Effect != EffectAllow && s.Effect != EffectDeny {
 			return fmt.Errorf("statement %d: Effect %q is not Allow or Deny", i, s.Effect)
 		}
-		if !s.wellFormedActions() || !s.wellFormedResources() {
-			operator, _, _ := s.unenforceable(endpointMode)
-			return fmt.Errorf("statement %d: %s is not supported", i, operator)
-		}
 		if _, _, fault := s.endpointFault(); fault != "" {
 			return fmt.Errorf("statement %d: %s", i, fault)
 		}
@@ -97,17 +99,17 @@ func CheckEndpointPolicy(policy PolicyDocument) error {
 	return nil
 }
 
-// endpointUnenforceable is unenforceable for an endpoint policy: a Principal the
-// gate can match, conditions it enforces with operands it can read, and policy
-// variables it can resolve.
-func (s *Statement) endpointUnenforceable() (operator, key string, found bool) {
-	operator, key, fault := s.endpointFault()
-	return operator, key, fault != ""
-}
-
 // endpointFault names the first construct of an endpoint statement the gate
 // cannot enforce, with the reason a write path reports, or "" if there is none.
 func (s *Statement) endpointFault() (operator, key, fault string) {
+	// A statement selecting no action or no resource would store a Deny that
+	// never fires.
+	if (len(s.Action) == 0) == (len(s.NotAction) == 0) {
+		return "Action/NotAction", "", "a statement needs exactly one of Action and NotAction"
+	}
+	if (len(s.Resource) == 0) == (len(s.NotResource) == 0) {
+		return "Resource/NotResource", "", "a statement needs exactly one of Resource and NotResource"
+	}
 	if _, ok := endpointPrincipals(s.Principal); !ok {
 		return "Principal", "", "Principal must be \"*\" or name AWS accounts; name users and roles with aws:PrincipalArn"
 	}
@@ -123,6 +125,9 @@ func (s *Statement) endpointFault() (operator, key, fault string) {
 			return op, "", fmt.Sprintf("condition %s names no key", op)
 		}
 		base, _ := BaseOperator(op)
+		if positive, negated := negatedOperators[base]; negated {
+			base = positive
+		}
 		for k, values := range byKey {
 			switch {
 			case !SupportedEndpointCondition(op, k):
@@ -143,12 +148,10 @@ func (s *Statement) endpointFault() (operator, key, fault string) {
 	return "", "", ""
 }
 
-// readableOperand reports whether the matcher can compare with v under
-// operator, which otherwise reads v as matching nothing and so could drop a Deny.
+// readableOperand reports whether the matcher can compare with v under the
+// positive operator, which otherwise reads v as matching nothing and so could
+// drop a Deny.
 func readableOperand(operator, v string) bool {
-	if positive, negated := negatedOperators[operator]; negated {
-		operator = positive
-	}
 	switch operator {
 	case OpNull, OpBool:
 		return strings.EqualFold(v, "true") || strings.EqualFold(v, "false")
@@ -168,12 +171,9 @@ func readableOperand(operator, v string) bool {
 	return true
 }
 
-// substitutesValues reports whether operator resolves policy variables in its
-// values, as conditionHolds does for the string and ARN operators.
+// substitutesValues reports whether the positive operator resolves policy
+// variables in its values, as conditionHolds does for the string and ARN ones.
 func substitutesValues(operator string) bool {
-	if positive, negated := negatedOperators[operator]; negated {
-		operator = positive
-	}
 	switch operator {
 	case OpStringEquals, OpStringEqualsIgnoreCase, OpStringLike, OpArnEquals, OpArnLike:
 		return true
