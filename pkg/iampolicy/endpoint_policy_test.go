@@ -196,7 +196,7 @@ func TestParseEndpointPolicy_RefusesAnEmptyCondition(t *testing.T) {
 	for _, condition := range []string{`{}`, `null`, ` { } `} {
 		_, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":[` + allowAll + `,` +
 			`{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":` + condition + `}]}`))
-		require.EqualError(t, err, "statement 1: Condition is empty; omit it for a statement with no condition", condition)
+		require.EqualError(t, err, "statement 1: the Condition element is empty; omit it for a statement with no condition", condition)
 	}
 	_, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":` + allowAll + `}`))
 	require.NoError(t, err)

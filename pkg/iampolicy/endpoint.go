@@ -68,7 +68,7 @@ func emptyCondition(raw json.RawMessage) error {
 		}
 		var conditions map[string]json.RawMessage
 		if v = bytes.TrimSpace(v); bytes.Equal(v, []byte("null")) || (json.Unmarshal(v, &conditions) == nil && len(conditions) == 0) {
-			return errors.New("Condition is empty; omit it for a statement with no condition")
+			return errors.New("the Condition element is empty; omit it for a statement with no condition")
 		}
 	}
 	return nil
