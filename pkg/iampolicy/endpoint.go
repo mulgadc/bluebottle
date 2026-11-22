@@ -3,6 +3,7 @@ package iampolicy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
@@ -27,27 +28,50 @@ func ParseEndpointPolicy(raw []byte) (PolicyDocument, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return PolicyDocument{}, err
 	}
-	out := PolicyDocument{Version: doc.Version}
+	var raws []json.RawMessage
 	body := bytes.TrimSpace(doc.Statement)
 	switch {
 	case len(body) == 0 || bytes.Equal(body, []byte("null")):
 	case body[0] == '{':
-		var one Statement
-		if err := json.Unmarshal(body, &one); err != nil {
-			return PolicyDocument{}, err
-		}
-		out.Statement = []Statement{one}
+		raws = []json.RawMessage{body}
 	default:
-		if err := json.Unmarshal(body, &out.Statement); err != nil {
+		if err := json.Unmarshal(body, &raws); err != nil {
 			return PolicyDocument{}, err
 		}
 	}
-	for i := range out.Statement {
+	out := PolicyDocument{Version: doc.Version, Statement: make([]Statement, len(raws))}
+	for i, raw := range raws {
+		if err := json.Unmarshal(raw, &out.Statement[i]); err != nil {
+			return PolicyDocument{}, err
+		}
+		if err := emptyCondition(raw); err != nil {
+			return PolicyDocument{}, fmt.Errorf("statement %d: %w", i, err)
+		}
 		if err := canonicalKeys(out.Statement[i].Condition); err != nil {
 			return PolicyDocument{}, fmt.Errorf("statement %d: %w", i, err)
 		}
 	}
 	return out, nil
+}
+
+// emptyCondition refuses a Condition element written as {} or null, which
+// would read as no condition and make an Allow unconditional; a statement
+// that omits Condition has none.
+func emptyCondition(raw json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for name, v := range fields {
+		if !strings.EqualFold(name, "Condition") {
+			continue
+		}
+		var conditions map[string]json.RawMessage
+		if v = bytes.TrimSpace(v); bytes.Equal(v, []byte("null")) || (json.Unmarshal(v, &conditions) == nil && len(conditions) == 0) {
+			return errors.New("Condition is empty; omit it for a statement with no condition")
+		}
+	}
+	return nil
 }
 
 // canonicalKeys respells each condition key that names a registered key in

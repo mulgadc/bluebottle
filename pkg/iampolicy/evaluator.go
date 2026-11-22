@@ -98,10 +98,14 @@ func (s *Statement) matches(action, resource string, keys ConditionKeys, m mode)
 		}
 
 		// Deny, and unrecognized effects, fall through so the caller's Effect
-		// switch still fires. A malformed or empty selector pair is treated as
-		// matching on that half, since it cannot be read as a narrower statement.
-		actions := len(s.Action) > 0 != (len(s.NotAction) > 0)
-		resources := len(s.Resource) > 0 != (len(s.NotResource) > 0)
+		// switch still fires. A malformed selector pair is treated as matching
+		// on that half, since it cannot be read as a narrower statement, and in
+		// an endpoint policy so is an empty one, which the write path refuses.
+		actions, resources := s.wellFormedActions(), s.wellFormedResources()
+		if m == endpointMode {
+			actions = actions && (len(s.Action) > 0 || len(s.NotAction) > 0)
+			resources = resources && (len(s.Resource) > 0 || len(s.NotResource) > 0)
+		}
 		return (!actions || s.matchesAction(action)) &&
 			(!resources || s.matchesResource(resource, keys, failClosed))
 	}

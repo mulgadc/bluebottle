@@ -190,6 +190,28 @@ func TestParseEndpointPolicy_RefusesAKeyNamedTwice(t *testing.T) {
 	require.EqualError(t, err, "statement 0: condition StringEquals names aws:PrincipalAccount twice")
 }
 
+// An empty Condition would read as none and make an Allow unconditional, so it
+// is refused; a statement that omits Condition is unconditional as written.
+func TestParseEndpointPolicy_RefusesAnEmptyCondition(t *testing.T) {
+	for _, condition := range []string{`{}`, `null`, ` { } `} {
+		_, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":[` + allowAll + `,` +
+			`{"Effect":"Allow","Principal":"*","Action":"*","Resource":"*","Condition":` + condition + `}]}`))
+		require.EqualError(t, err, "statement 1: Condition is empty; omit it for a statement with no condition", condition)
+	}
+	_, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":` + allowAll + `}`))
+	require.NoError(t, err)
+}
+
+// The empty-selector rule is the endpoint mode's: an identity Deny missing its
+// Action still selects nothing, as before.
+func TestEvaluate_IdentityDenyWithoutAnActionSelectsNothing(t *testing.T) {
+	policies := []iampolicy.PolicyDocument{{Version: iampolicy.Version2012, Statement: []iampolicy.Statement{
+		{Effect: "Allow", Action: iampolicy.StringOrArr{"*"}, Resource: iampolicy.StringOrArr{"*"}},
+		{Effect: "Deny", Principal: []byte(`"*"`), Resource: iampolicy.StringOrArr{"*"}},
+	}}}
+	assert.Equal(t, iampolicy.Allow, iampolicy.EvaluateWithKeys(endpointAction, endpointResource, policies, nil))
+}
+
 // AWS reads a lone statement object as a one-statement array.
 func TestParseEndpointPolicy_StatementObject(t *testing.T) {
 	doc, err := iampolicy.ParseEndpointPolicy([]byte(`{"Version":"2012-10-17","Statement":` + allowAll + `}`))
