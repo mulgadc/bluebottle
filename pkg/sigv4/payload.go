@@ -12,9 +12,9 @@ import (
 	"strings"
 )
 
-// payloadMode classifies an S3 x-amz-content-sha256 value as a recognised sentinel, or as a
-// literal payload digest (the empty mode). An unrecognised value is rejected rather than
-// signed verbatim, which would let a client opt its body out of the signature.
+// payloadMode classifies x-amz-content-sha256 as a sentinel or a literal digest (empty mode).
+// The set is narrower than S3: the SigV4a and event-stream sentinels are rejected until those
+// modes exist. Any other value is rejected, so a client cannot opt its body out of the signature.
 func payloadMode(contentHash string) (ContentMode, error) {
 	switch mode := ContentMode(contentHash); mode {
 	case UnsignedPayload, StreamingSigned, StreamingSignedTrailer, StreamingUnsignedTrailer:
@@ -40,12 +40,13 @@ func (req *SignedRequest) bindPayload() error {
 		return nil
 	}
 
-	digest := strings.ToLower(req.Canonical.ContentHash)
+	client := req.Canonical.ContentHash
+	digest := strings.ToLower(client)
 
 	body := req.req.Body
 	if body == nil || body == http.NoBody {
 		if digest != EmptyPayload {
-			return fmt.Errorf("%w: request has no body", ErrContentSHA256Mismatch)
+			return &ContentSHA256MismatchError{Client: client, Computed: EmptyPayload}
 		}
 
 		return nil
@@ -57,11 +58,13 @@ func (req *SignedRequest) bindPayload() error {
 		// ContentLength is the exact size, so the buffer is allocated once. io.ReadAll would
 		// grow by repeated doubling instead, allocating about twice the body.
 		buf := make([]byte, length)
-		if _, err := io.ReadFull(body, buf); err != nil {
+		if n, err := io.ReadFull(body, buf); err != nil {
 			// A body shorter than its declared length cannot hash to the signed digest, so
 			// it fails the same way a rewritten one does rather than as a read error.
 			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-				return ErrContentSHA256Mismatch
+				sum := sha256.Sum256(buf[:n])
+
+				return &ContentSHA256MismatchError{Client: client, Computed: hex.EncodeToString(sum[:])}
 			}
 
 			return fmt.Errorf("reading request body to verify payload hash: %w", err)
@@ -72,8 +75,8 @@ func (req *SignedRequest) bindPayload() error {
 		req.req.Body = io.NopCloser(bytes.NewReader(buf))
 
 		sum := sha256.Sum256(buf)
-		if hex.EncodeToString(sum[:]) != digest {
-			return ErrContentSHA256Mismatch
+		if computed := hex.EncodeToString(sum[:]); computed != digest {
+			return &ContentSHA256MismatchError{Client: client, Computed: computed}
 		}
 
 		return nil
@@ -81,6 +84,7 @@ func (req *SignedRequest) bindPayload() error {
 
 	req.req.Body = &verifiedBody{
 		body:      body,
+		client:    client,
 		digest:    digest,
 		hash:      sha256.New(),
 		remaining: req.req.ContentLength,
@@ -98,6 +102,7 @@ func (req *SignedRequest) bindPayload() error {
 type verifiedBody struct {
 	body      io.ReadCloser
 	hash      hash.Hash
+	client    string // x-amz-content-sha256 as sent, for the mismatch error
 	digest    string
 	remaining int64 // declared bytes still to come, meaningful only when sized
 	sized     bool
@@ -120,18 +125,18 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 	// it fails the way a rewritten one does. What decides that is the bytes still owed, not
 	// the error: HTTP/2 reports a short body in its own words, not as io.ErrUnexpectedEOF.
 	if b.sized && b.remaining > 0 && err != nil && !errors.Is(err, io.EOF) {
-		b.err = ErrContentSHA256Mismatch
+		b.err = &ContentSHA256MismatchError{Client: b.client, Computed: hex.EncodeToString(b.hash.Sum(nil))}
 
 		return 0, b.err
 	}
 
 	if !b.verified && (b.sized && b.remaining <= 0 || errors.Is(err, io.EOF)) {
-		if hex.EncodeToString(b.hash.Sum(nil)) != b.digest {
+		if computed := hex.EncodeToString(b.hash.Sum(nil)); computed != b.digest {
 			// Sticky, so a consumer that keeps reading cannot read past the failure into a
 			// clean EOF and treat the body as complete. The bytes from this read are withheld
 			// as well: io.ReadFull, io.ReadAtLeast and io.CopyN all discard an error that
 			// arrives alongside a full byte count, so a short read is what reaches them.
-			b.err = ErrContentSHA256Mismatch
+			b.err = &ContentSHA256MismatchError{Client: b.client, Computed: computed}
 
 			return 0, b.err
 		}
