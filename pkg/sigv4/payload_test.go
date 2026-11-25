@@ -343,8 +343,9 @@ func TestParseSurfacesBodyReadFailure(t *testing.T) {
 	}
 }
 
-// TestMismatchReportsBothDigests covers each point where a body fails its binding: the error
-// carries the header value as sent and the SHA-256 of the bytes read, and is still the sentinel.
+// TestMismatchReportsBothDigests covers each point where a body fails its binding. A full body
+// carries the header value as sent and the SHA-256 of the bytes read; a short body carries no
+// digests, as S3 reports none for it. Every case is still the sentinel.
 func TestMismatchReportsBothDigests(t *testing.T) {
 	small := []byte("hello")
 	large := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
@@ -380,8 +381,7 @@ func TestMismatchReportsBothDigests(t *testing.T) {
 
 				return verify(req)
 			},
-			wantClient:   sha256Hex(small),
-			wantComputed: sha256Hex(small[:2]),
+			// No digests: wantClient and wantComputed stay empty.
 		},
 		{
 			name:         "buffered body rewritten",
@@ -402,8 +402,7 @@ func TestMismatchReportsBothDigests(t *testing.T) {
 					return &shortBody{b: b[:len(b)/2], err: io.ErrUnexpectedEOF}
 				}))
 			},
-			wantClient:   sha256Hex(large),
-			wantComputed: sha256Hex(large[:len(large)/2]),
+			// No digests: wantClient and wantComputed stay empty.
 		},
 		{
 			name:         "streamed body rewritten",
@@ -421,6 +420,13 @@ func TestMismatchReportsBothDigests(t *testing.T) {
 			}
 
 			var mismatch *sigv4.ContentSHA256MismatchError
+			if tc.wantClient == "" {
+				if errors.As(err, &mismatch) {
+					t.Fatalf("short body reported digests %+v", mismatch)
+				}
+
+				return
+			}
 			if !errors.As(err, &mismatch) {
 				t.Fatalf("got %T, want *sigv4.ContentSHA256MismatchError", err)
 			}

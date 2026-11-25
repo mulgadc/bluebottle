@@ -13,8 +13,8 @@ import (
 )
 
 // payloadMode classifies x-amz-content-sha256 as a sentinel or a literal digest (empty mode).
-// The set is narrower than S3: the SigV4a and event-stream sentinels are rejected until those
-// modes exist. Any other value is rejected, so a client cannot opt its body out of the signature.
+// The set is narrower than S3: the SigV4a sentinels are rejected until SigV4a exists. Any other
+// value is rejected too, so a client cannot opt its body out of the signature.
 func payloadMode(contentHash string) (ContentMode, error) {
 	switch mode := ContentMode(contentHash); mode {
 	case UnsignedPayload, StreamingSigned, StreamingSignedTrailer, StreamingUnsignedTrailer:
@@ -58,13 +58,12 @@ func (req *SignedRequest) bindPayload() error {
 		// ContentLength is the exact size, so the buffer is allocated once. io.ReadAll would
 		// grow by repeated doubling instead, allocating about twice the body.
 		buf := make([]byte, length)
-		if n, err := io.ReadFull(body, buf); err != nil {
-			// A body shorter than its declared length cannot hash to the signed digest, so
-			// it fails the same way a rewritten one does rather than as a read error.
+		if _, err := io.ReadFull(body, buf); err != nil {
+			// A body shorter than its declared length cannot hash to the signed digest, so it
+			// fails as a mismatch rather than as a read error. It carries no digests: S3 reports
+			// a short body as IncompleteBody, with none.
 			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-				sum := sha256.Sum256(buf[:n])
-
-				return &ContentSHA256MismatchError{Client: client, Computed: hex.EncodeToString(sum[:])}
+				return ErrContentSHA256Mismatch
 			}
 
 			return fmt.Errorf("reading request body to verify payload hash: %w", err)
@@ -122,10 +121,10 @@ func (b *verifiedBody) Read(p []byte) (int, error) {
 	}
 
 	// A sized body that ends before its declared length cannot hash to the signed digest, so
-	// it fails the way a rewritten one does. What decides that is the bytes still owed, not
-	// the error: HTTP/2 reports a short body in its own words, not as io.ErrUnexpectedEOF.
+	// it fails as a mismatch, with no digests, as the buffered path does. What decides that is
+	// the bytes still owed, not the error: HTTP/2 reports a short body in its own words.
 	if b.sized && b.remaining > 0 && err != nil && !errors.Is(err, io.EOF) {
-		b.err = &ContentSHA256MismatchError{Client: b.client, Computed: hex.EncodeToString(b.hash.Sum(nil))}
+		b.err = ErrContentSHA256Mismatch
 
 		return 0, b.err
 	}
