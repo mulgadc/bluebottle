@@ -342,3 +342,97 @@ func TestParseSurfacesBodyReadFailure(t *testing.T) {
 		t.Fatalf("Parse error = %v, want it to wrap the read error", err)
 	}
 }
+
+// TestMismatchReportsBothDigests covers each point where a body fails its binding: the error
+// carries the header value as sent and the SHA-256 of the bytes read, and is still the sentinel.
+func TestMismatchReportsBothDigests(t *testing.T) {
+	small := []byte("hello")
+	large := bytes.Repeat([]byte("a"), sigv4.MaxPayloadLen+1)
+	rewritten := bytes.Repeat([]byte("b"), len(large))
+
+	// verify runs Verify on a small body, which binds it before Verify returns.
+	verify := func(req *http.Request) error { return parseVerify(req, "us-east-1", "s3", oracleTime) }
+
+	// stream reads a large body through to its end, where the binding is decided.
+	stream := func(rc io.ReadCloser) error {
+		_, err := io.ReadAll(rc)
+
+		return err
+	}
+
+	tests := []struct {
+		name         string
+		err          func(t *testing.T) error
+		wantClient   string
+		wantComputed string
+	}{
+		{
+			name:         "no body",
+			err:          func(t *testing.T) error { return verify(signS3(t, nil, sha256Hex(small))) },
+			wantClient:   sha256Hex(small),
+			wantComputed: sigv4.EmptyPayload,
+		},
+		{
+			name: "buffered body shorter than its length",
+			err: func(t *testing.T) error {
+				req := signS3(t, small, sha256Hex(small))
+				req.Body = io.NopCloser(bytes.NewReader(small[:2]))
+
+				return verify(req)
+			},
+			wantClient:   sha256Hex(small),
+			wantComputed: sha256Hex(small[:2]),
+		},
+		{
+			name:         "buffered body rewritten",
+			err:          func(t *testing.T) error { return verify(signS3(t, []byte("world"), sha256Hex(small))) },
+			wantClient:   sha256Hex(small),
+			wantComputed: sha256Hex([]byte("world")),
+		},
+		{
+			name:         "buffered body under a mixed-case digest",
+			err:          func(t *testing.T) error { return verify(signS3(t, []byte("world"), strings.ToUpper(sha256Hex(small)))) },
+			wantClient:   strings.ToUpper(sha256Hex(small)),
+			wantComputed: sha256Hex([]byte("world")),
+		},
+		{
+			name: "streamed body shorter than its length",
+			err: func(t *testing.T) error {
+				return stream(largeSignedBody(t, large, sha256Hex(large), func(b []byte) io.ReadCloser {
+					return &shortBody{b: b[:len(b)/2], err: io.ErrUnexpectedEOF}
+				}))
+			},
+			wantClient:   sha256Hex(large),
+			wantComputed: sha256Hex(large[:len(large)/2]),
+		},
+		{
+			name:         "streamed body rewritten",
+			err:          func(t *testing.T) error { return stream(largeSignedBody(t, rewritten, sha256Hex(large), nil)) },
+			wantClient:   sha256Hex(large),
+			wantComputed: sha256Hex(rewritten),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.err(t)
+			if !errors.Is(err, sigv4.ErrContentSHA256Mismatch) {
+				t.Fatalf("got %v, want %v", err, sigv4.ErrContentSHA256Mismatch)
+			}
+
+			var mismatch *sigv4.ContentSHA256MismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("got %T, want *sigv4.ContentSHA256MismatchError", err)
+			}
+			if mismatch.Client != tc.wantClient {
+				t.Errorf("Client = %q, want %q", mismatch.Client, tc.wantClient)
+			}
+			if mismatch.Computed != tc.wantComputed {
+				t.Errorf("Computed = %q, want %q", mismatch.Computed, tc.wantComputed)
+			}
+			if strings.Contains(err.Error(), tc.wantComputed) {
+				t.Errorf("Error() = %q carries the computed digest", err.Error())
+			}
+		})
+	}
+}

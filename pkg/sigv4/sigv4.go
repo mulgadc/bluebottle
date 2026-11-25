@@ -119,6 +119,21 @@ var (
 	ErrSignatureMismatch = errors.New("signature mismatch")
 )
 
+// ContentSHA256MismatchError is ErrContentSHA256Mismatch with the two digests that disagree.
+// Client is the x-amz-content-sha256 value as sent; Computed is the SHA-256 of the bytes read.
+// Error leaves both out, so logging the error does not record a digest of the body.
+type ContentSHA256MismatchError struct {
+	Client   string
+	Computed string
+}
+
+var _ error = (*ContentSHA256MismatchError)(nil)
+
+func (e *ContentSHA256MismatchError) Error() string { return ErrContentSHA256Mismatch.Error() }
+
+// Unwrap keeps errors.Is(err, ErrContentSHA256Mismatch) true for every caller.
+func (e *ContentSHA256MismatchError) Unwrap() error { return ErrContentSHA256Mismatch }
+
 // VerifiedRequest is the result of a successful Verify. It embeds the authenticated
 // SignedRequest and carries the derived signing key.
 type VerifiedRequest struct {
